@@ -13,10 +13,41 @@ import path from "node:path";
 const APP_NAME = "凹凸宇宙桌面收听";
 const LOOPBACK_HOST = "127.0.0.1";
 const ACCESS_HEADER = "x-aotu-desktop-key";
+const STATIC_CONTENT_TYPES = new Map([
+  [".avif", "image/avif"],
+  [".css", "text/css; charset=utf-8"],
+  [".gif", "image/gif"],
+  [".html", "text/html; charset=utf-8"],
+  [".ico", "image/x-icon"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".js", "application/javascript; charset=utf-8"],
+  [".json", "application/json; charset=utf-8"],
+  [".mjs", "application/javascript; charset=utf-8"],
+  [".png", "image/png"],
+  [".svg", "image/svg+xml"],
+  [".webp", "image/webp"],
+  [".woff", "font/woff"],
+  [".woff2", "font/woff2"],
+]);
 
 let mainWindow;
 let localServer;
 let isQuitting = false;
+
+function logFilePath() {
+  return path.join(app.getPath("userData"), "desktop.log");
+}
+
+function logEvent(level, event, details = {}) {
+  const entry = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level,
+    event,
+    ...details,
+  });
+  fs.appendFile(logFilePath(), `${entry}\n`, () => {});
+}
 
 function runtimeConfigPath() {
   return app.isPackaged
@@ -39,20 +70,76 @@ function constantTimeEqual(left, right) {
   );
 }
 
-function protectServer(server, accessKey) {
+async function serveDesktopStaticFile(request, response, clientDir) {
+  if (request.method !== "GET" && request.method !== "HEAD") return false;
+
+  let pathname;
+  try {
+    pathname = decodeURIComponent(
+      new URL(request.url ?? "/", "http://localhost").pathname,
+    );
+  } catch {
+    return false;
+  }
+  if (pathname === "/" || pathname.startsWith("/api/")) return false;
+
+  const resolvedClientDir = path.resolve(clientDir);
+  const targetPath = path.resolve(
+    resolvedClientDir,
+    pathname.replace(/^[/\\]+/, ""),
+  );
+  if (
+    targetPath !== resolvedClientDir &&
+    !targetPath.startsWith(`${resolvedClientDir}${path.sep}`)
+  ) {
+    return false;
+  }
+
+  let stat;
+  try {
+    stat = await fsPromises.stat(targetPath);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile()) return false;
+
+  const contentType =
+    STATIC_CONTENT_TYPES.get(path.extname(targetPath).toLowerCase()) ??
+    "application/octet-stream";
+  response.writeHead(200, {
+    "Cache-Control": pathname.startsWith("/assets/")
+      ? "public, max-age=31536000, immutable"
+      : "public, max-age=3600",
+    "Content-Length": String(stat.size),
+    "Content-Type": contentType,
+    "X-Content-Type-Options": "nosniff",
+  });
+  if (request.method === "HEAD") {
+    response.end();
+  } else {
+    fs.createReadStream(targetPath).pipe(response);
+  }
+  return true;
+}
+
+function protectServer(server, accessKey, clientDir) {
   const listeners = server.listeners("request");
   if (listeners.length === 0) {
     throw new Error("本地服务没有可保护的请求处理器。");
   }
 
   server.removeAllListeners("request");
-  server.on("request", (request, response) => {
+  server.on("request", async (request, response) => {
     const rawHeader = request.headers[ACCESS_HEADER];
     const provided = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
     if (
       typeof provided !== "string" ||
       !constantTimeEqual(provided, accessKey)
     ) {
+      logEvent("warn", "local-request-denied", {
+        method: request.method,
+        pathname: new URL(request.url ?? "/", "http://localhost").pathname,
+      });
       response.writeHead(403, {
         "Cache-Control": "no-store",
         "Content-Type": "text/plain; charset=utf-8",
@@ -60,6 +147,8 @@ function protectServer(server, accessKey) {
       response.end("Forbidden");
       return;
     }
+
+    if (await serveDesktopStaticFile(request, response, clientDir)) return;
 
     for (const listener of listeners) {
       listener.call(server, request, response);
@@ -137,13 +226,16 @@ async function loadSessionSecret() {
 }
 
 function attachDesktopRequestKey(port, accessKey) {
+  const origin = `http://${LOOPBACK_HOST}:${port}`;
   const requestFilter = {
-    urls: [`http://${LOOPBACK_HOST}:${port}/*`],
+    urls: ["<all_urls>"],
   };
   session.defaultSession.webRequest.onBeforeSendHeaders(
     requestFilter,
     (details, callback) => {
-      details.requestHeaders[ACCESS_HEADER] = accessKey;
+      if (new URL(details.url).origin === origin) {
+        details.requestHeaders[ACCESS_HEADER] = accessKey;
+      }
       callback({ requestHeaders: details.requestHeaders });
     },
   );
@@ -169,6 +261,24 @@ function createWindow(port) {
   });
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription) => {
+      logEvent("error", "renderer-load-failed", {
+        errorCode,
+        errorDescription,
+      });
+    },
+  );
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    logEvent("error", "renderer-process-gone", {
+      reason: details.reason,
+      exitCode: details.exitCode,
+    });
+  });
+  mainWindow.webContents.on("did-finish-load", () => {
+    logEvent("info", "renderer-loaded");
+  });
   mainWindow.webContents.on("will-navigate", (event, targetUrl) => {
     if (new URL(targetUrl).origin !== origin) event.preventDefault();
   });
@@ -198,8 +308,12 @@ async function startDesktop() {
     noCompression: false,
   });
   localServer = started.server;
-  protectServer(localServer, accessKey);
+  protectServer(localServer, accessKey, path.join(outDir, "client"));
   attachDesktopRequestKey(started.port, accessKey);
+  logEvent("info", "local-server-started", {
+    host: LOOPBACK_HOST,
+    port: started.port,
+  });
   createWindow(started.port);
 }
 
@@ -238,6 +352,7 @@ if (!hasSingleInstanceLock) {
     })
     .catch(async (error) => {
       const detail = error instanceof Error ? error.message : String(error);
+      logEvent("error", "desktop-start-failed", { detail });
       await dialog.showMessageBox({
         type: "error",
         title: `${APP_NAME}无法启动`,

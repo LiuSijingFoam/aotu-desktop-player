@@ -15,7 +15,7 @@
     "desktop:package": "npm run build && npm run desktop:prepare && electron-builder --win nsis",
     "desktop:package:dir": "npm run build && npm run desktop:prepare && electron-builder --win --dir",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern release --ignore-pattern .desktop"
   },
   "dependencies": {
     "next": "16.2.6",

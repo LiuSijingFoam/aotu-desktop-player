@@ -1,6 +1,8 @@
 # 凹凸宇宙桌面收听
 
-仅供账号本人使用的桌面网页客户端。它通过服务端代理连接凹凸宇宙官方 API，让无法安装安卓模拟器的电脑仍可完成短信登录、读取会员节目和在线播放。
+仅供账号本人使用的 Windows 桌面客户端。它可以作为完全本地的
+Electron 应用运行，由本机内部服务连接凹凸宇宙官方 API，无需 VPS 或
+Cloudflare。
 
 ## 已实现
 
@@ -13,13 +15,46 @@
 - 登录令牌加密存入 HttpOnly Cookie；浏览器脚本不可读取
 - 私有部署、安全响应头和非开放式媒体代理
 
-## 本地启动
+## 运行桌面版
+
+安装依赖后，在未提交的 `.env.local` 文件中配置媒体签名值：
+
+```dotenv
+AOTU_MEDIA_SALT=你的媒体签名值
+```
+
+构建并启动桌面应用：
+
+```powershell
+npm run desktop:run
+```
+
+应用只在 `127.0.0.1` 的随机端口启动内部服务，并为 Electron 自身的请求
+添加一次性访问密钥。登录会话密钥由 Windows 安全存储加密保存。
+
+## 生成 Windows 安装包
+
+```powershell
+npm run desktop:package
+```
+
+安装程序会生成在 `release` 目录。个人版本会携带本机私有配置，请勿公开
+分发生成的安装包。
+
+如需只生成免安装目录用于调试：
+
+```powershell
+npm run desktop:package:dir
+```
+
+## 浏览器开发模式
 
 ```powershell
 npm run dev
 ```
 
-打开 `http://localhost:3000`。生产环境必须设置 `.env.example` 中的两个安全值；不要把真实值提交到版本库。
+打开 `http://localhost:3000`。浏览器部署仍需设置 `.env.example` 中的两个
+安全值；不要把真实值提交到版本库。
 
 ## 使用边界
 
