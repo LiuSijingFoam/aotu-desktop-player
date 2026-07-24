@@ -2,6 +2,7 @@
   "name": "aotu-desktop-player",
   "version": "0.1.0",
   "private": true,
+  "main": "desktop/main.mjs",
   "engines": {
     "node": ">=22.13.0"
   },
@@ -9,13 +10,18 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
+    "desktop:run": "npm run build && npm run desktop:prepare && electron .",
+    "desktop:prepare": "node scripts/prepare-desktop-runtime.mjs",
+    "desktop:package": "npm run build && npm run desktop:prepare && electron-builder --win nsis",
+    "desktop:package:dir": "npm run build && npm run desktop:prepare && electron-builder --win --dir",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
     "next": "16.2.6",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "vinext": "0.0.50"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
@@ -25,14 +31,55 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
-    "vinext": "0.0.50",
     "vite": "8.0.13",
     "wrangler": "4.92.0"
+  },
+  "build": {
+    "appId": "com.personal.aotu.desktop",
+    "productName": "凹凸宇宙桌面收听",
+    "artifactName": "${productName}-${version}-Windows-${arch}.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist",
+        "to": "app-dist"
+      },
+      {
+        "from": ".desktop/runtime-config.json",
+        "to": "desktop-runtime.json"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "凹凸宇宙桌面收听"
+    }
   },
   "type": "module"
 }

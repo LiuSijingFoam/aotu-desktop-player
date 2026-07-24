@@ -44,4 +44,6 @@ next-env.d.ts
 /work/
 /.npm-cache/
 /.tools/
+/.desktop/
+/release/
 .dev-server*.log

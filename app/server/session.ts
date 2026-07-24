@@ -102,7 +102,9 @@ function cookieHeader(
   name: string,
   value: string,
   maxAge: number,
-  secure = process.env.NODE_ENV === "production",
+  secure =
+    process.env.AOTU_COOKIE_SECURE !== "0" &&
+    process.env.NODE_ENV === "production",
 ) {
   return [
     `${name}=${value}`,
