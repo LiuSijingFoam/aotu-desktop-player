@@ -13,6 +13,7 @@ export type Program = {
   coverUrl?: string;
   isVip?: boolean;
   episodeCount?: number;
+  latestEpisodeAt?: number;
 };
 
 export type Episode = {
@@ -32,6 +33,16 @@ export type DiscoveryPayload = {
   programs: Program[];
   episodes: Episode[];
   source: "member" | "public";
+};
+
+export type ProgramPayload = {
+  program: Program;
+  episodes: Episode[];
+  pagination: {
+    page: number;
+    total: number;
+    hasMore: boolean;
+  };
 };
 
 export type SessionPayload = {

@@ -1,0 +1,56 @@
+name: Build Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Package Windows installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check code
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+      - name: Prepare desktop runtime
+        run: npm run desktop:prepare
+
+      - name: Build Windows installer
+        run: npm exec electron-builder -- --win nsis --publish never
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $title = $tag -replace "^v", ""
+          $assets = Get-ChildItem release -File |
+            Where-Object { $_.Extension -in ".exe", ".blockmap", ".yml" } |
+            ForEach-Object { $_.FullName }
+
+          if (-not $assets) {
+            throw "No release assets were produced."
+          }
+
+          gh release create $tag $assets --title $title --generate-notes

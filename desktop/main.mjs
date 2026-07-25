@@ -252,6 +252,16 @@ function createWindow(port) {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: "#171716",
+    ...(process.platform === "win32"
+      ? {
+          titleBarStyle: "hidden",
+          titleBarOverlay: {
+            color: "#171716",
+            symbolColor: "#f5f1ea",
+            height: 40,
+          },
+        }
+      : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

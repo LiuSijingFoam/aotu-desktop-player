@@ -9,6 +9,17 @@ import {
   useState,
 } from "react";
 import { ApiError, playerApi } from "./api-client";
+import { EpisodeDrawer } from "./EpisodeDrawer";
+import {
+  DEFAULT_PROGRAM_PREFERENCES,
+  parseProgramPreferences,
+  PROGRAM_PREFERENCES_STORAGE_KEY,
+  serializeProgramPreferences,
+  sortPrograms,
+  type ProgramPreferences,
+  type ProgramSort,
+} from "./program-preferences";
+import { ProgramDrawer } from "./ProgramDrawer";
 import type {
   DiscoveryPayload,
   Episode,
@@ -43,7 +54,7 @@ function formatDate(value?: string) {
 
 function errorMessage(error: unknown) {
   if (error instanceof ApiError) return error.message;
-  if (error instanceof TypeError) return "暂时无法连接服务，请检查公司网络后重试。";
+  if (error instanceof TypeError) return "暂时无法连接服务，请检查网络后重试。";
   return "发生了意外错误，请稍后再试。";
 }
 
@@ -55,6 +66,27 @@ function readHistory(): HistoryEntry[] {
     return Array.isArray(parsed) ? parsed.slice(0, 40) : [];
   } catch {
     return [];
+  }
+}
+
+function readProgramPreferences() {
+  try {
+    return parseProgramPreferences(
+      localStorage.getItem(PROGRAM_PREFERENCES_STORAGE_KEY),
+    );
+  } catch {
+    return { ...DEFAULT_PROGRAM_PREFERENCES, pinnedIds: [] };
+  }
+}
+
+function writeProgramPreferences(preferences: ProgramPreferences) {
+  try {
+    localStorage.setItem(
+      PROGRAM_PREFERENCES_STORAGE_KEY,
+      serializeProgramPreferences(preferences),
+    );
+  } catch {
+    // Private browsing or a full storage quota should not block playback.
   }
 }
 
@@ -129,7 +161,7 @@ function LoginDialog({
 
   const validateMobile = () => {
     if (!/^1\d{10}$/.test(mobile)) {
-      setFormError("请输入 11 位中国大陆手机号。");
+      setFormError("请输入手机号。");
       return false;
     }
     setFormError("");
@@ -166,7 +198,7 @@ function LoginDialog({
         <div className="eyebrow">会员登录</div>
         <h2 id="login-title">在电脑上继续听</h2>
         <p className="dialog-copy">
-          验证码由凹凸宇宙官方服务发送。本站不会保存手机号、验证码或明文会员令牌。
+          验证码由凹凸宇宙官方服务发送。
         </p>
         <form className="login-form" onSubmit={submit}>
           <label>
@@ -214,7 +246,7 @@ function LoginDialog({
           </button>
         </form>
         <p className="privacy-note">
-          仅调用官方登录和会员校验，不提供下载或会员权限绕过。
+          调用官方登录和会员校验。
         </p>
       </section>
     </div>
@@ -224,6 +256,7 @@ function LoginDialog({
 export function PlayerApp() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const lastSavedRef = useRef(0);
+  const programRequestRef = useRef(0);
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [discovery, setDiscovery] = useState<DiscoveryPayload>({
@@ -236,6 +269,18 @@ export function PlayerApp() {
   const [activeProgram, setActiveProgram] = useState<Program | null>(null);
   const [programEpisodes, setProgramEpisodes] = useState<Episode[]>([]);
   const [programLoading, setProgramLoading] = useState(false);
+  const [programLoadingMore, setProgramLoadingMore] = useState(false);
+  const [programError, setProgramError] = useState("");
+  const [programPage, setProgramPage] = useState(1);
+  const [programHasMore, setProgramHasMore] = useState(false);
+  const [programTotal, setProgramTotal] = useState<number | undefined>();
+  const [episodeDrawerOpen, setEpisodeDrawerOpen] = useState(false);
+  const [programDrawerOpen, setProgramDrawerOpen] = useState(false);
+  const [programPreferences, setProgramPreferences] =
+    useState<ProgramPreferences>({
+      ...DEFAULT_PROGRAM_PREFERENCES,
+      pinnedIds: [],
+    });
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchPrograms, setSearchPrograms] = useState<Program[]>([]);
@@ -268,7 +313,10 @@ export function PlayerApp() {
   }, []);
 
   useEffect(() => {
-    queueMicrotask(() => setHistory(readHistory()));
+    queueMicrotask(() => {
+      setHistory(readHistory());
+      setProgramPreferences(readProgramPreferences());
+    });
     Promise.allSettled([playerApi.session(), playerApi.discovery()]).then(
       ([sessionResult, discoveryResult]) => {
         if (sessionResult.status === "fulfilled") {
@@ -283,6 +331,34 @@ export function PlayerApp() {
         setContentLoading(false);
       },
     );
+  }, []);
+
+  const toggleProgramPin = useCallback((programId: string) => {
+    setProgramPreferences((currentPreferences) => {
+      const isPinned = currentPreferences.pinnedIds.includes(programId);
+      const nextPreferences: ProgramPreferences = {
+        ...currentPreferences,
+        pinnedIds: isPinned
+          ? currentPreferences.pinnedIds.filter((id) => id !== programId)
+          : [
+              programId,
+              ...currentPreferences.pinnedIds.filter((id) => id !== programId),
+            ],
+      };
+      writeProgramPreferences(nextPreferences);
+      return nextPreferences;
+    });
+  }, []);
+
+  const changeProgramSort = useCallback((sort: ProgramSort) => {
+    setProgramPreferences((currentPreferences) => {
+      const nextPreferences: ProgramPreferences = {
+        ...currentPreferences,
+        sort,
+      };
+      writeProgramPreferences(nextPreferences);
+      return nextPreferences;
+    });
   }, []);
 
   useEffect(() => {
@@ -379,7 +455,7 @@ export function PlayerApp() {
           if (!player) return;
           player
             .play()
-            .catch(() => setNotice("音频已就绪，请点击底部播放键开始。"));
+            .catch(() => setNotice("音频已就绪，点击底部播放键开始。"));
         }, 0);
       } catch (error) {
         if (error instanceof ApiError && [401, 403].includes(error.status)) {
@@ -395,24 +471,104 @@ export function PlayerApp() {
     [current],
   );
 
+  const clearProgramContext = useCallback(() => {
+    programRequestRef.current += 1;
+    setActiveProgram(null);
+    setProgramEpisodes([]);
+    setProgramLoading(false);
+    setProgramLoadingMore(false);
+    setProgramError("");
+    setProgramPage(1);
+    setProgramHasMore(false);
+    setProgramTotal(undefined);
+    setEpisodeDrawerOpen(false);
+    setProgramDrawerOpen(false);
+  }, []);
+
   const selectProgram = async (program: Program) => {
+    const requestId = programRequestRef.current + 1;
+    programRequestRef.current = requestId;
     setView("discover");
     setQuery("");
     setSearching(false);
     setSearchPrograms([]);
     setSearchEpisodes([]);
     setActiveProgram(program);
+    setProgramDrawerOpen(false);
+    setEpisodeDrawerOpen(true);
     setProgramLoading(true);
+    setProgramLoadingMore(false);
+    setProgramError("");
+    setProgramPage(1);
+    setProgramHasMore(false);
+    setProgramTotal(program.episodeCount);
     setProgramEpisodes([]);
     try {
-      const result = await playerApi.program(program.id);
+      const result = await playerApi.program(program.id, 1);
+      if (programRequestRef.current !== requestId) return;
       setActiveProgram(result.program);
       setProgramEpisodes(result.episodes);
+      setProgramPage(result.pagination.page);
+      setProgramHasMore(result.pagination.hasMore);
+      setProgramTotal(result.pagination.total);
     } catch (error) {
-      setNotice(errorMessage(error));
+      if (programRequestRef.current === requestId) {
+        setProgramError(errorMessage(error));
+      }
     } finally {
-      setProgramLoading(false);
+      if (programRequestRef.current === requestId) {
+        setProgramLoading(false);
+      }
     }
+  };
+
+  const loadMoreProgramEpisodes = async () => {
+    if (!activeProgram || !programHasMore || programLoadingMore) return;
+    const requestId = programRequestRef.current;
+    const nextPage = programPage + 1;
+    setProgramLoadingMore(true);
+    setProgramError("");
+    try {
+      const result = await playerApi.program(activeProgram.id, nextPage);
+      if (programRequestRef.current !== requestId) return;
+      const existingIds = new Set(programEpisodes.map((episode) => episode.id));
+      const nextEpisodes = result.episodes.filter(
+        (episode) => !existingIds.has(episode.id),
+      );
+      setProgramEpisodes((existing) => [...existing, ...nextEpisodes]);
+      setProgramPage(result.pagination.page);
+      setProgramTotal(result.pagination.total);
+      setProgramHasMore(
+        nextEpisodes.length > 0 && result.pagination.hasMore,
+      );
+    } catch (error) {
+      if (programRequestRef.current === requestId) {
+        setNotice(`更多节目载入失败：${errorMessage(error)}`);
+      }
+    } finally {
+      if (programRequestRef.current === requestId) {
+        setProgramLoadingMore(false);
+      }
+    }
+  };
+
+  const openEpisodeDrawer = () => {
+    if (activeProgram) {
+      setProgramDrawerOpen(false);
+      setEpisodeDrawerOpen(true);
+      return;
+    }
+    if (!current?.programId) return;
+    void selectProgram({
+      id: current.programId,
+      title: current.programTitle ?? "当前节目",
+      coverUrl: current.coverUrl,
+    });
+  };
+
+  const openProgramDrawer = () => {
+    setEpisodeDrawerOpen(false);
+    setProgramDrawerOpen(true);
   };
 
   const sendCode = async (mobile: string) => {
@@ -449,8 +605,7 @@ export function PlayerApp() {
     try {
       await playerApi.logout();
       setViewer(null);
-      setActiveProgram(null);
-      setProgramEpisodes([]);
+      clearProgramContext();
       setNotice("已安全退出。");
       await loadDiscovery();
     } catch (error) {
@@ -461,6 +616,14 @@ export function PlayerApp() {
   const displayPrograms = query.trim().length >= 2
     ? searchPrograms
     : discovery.programs;
+  const featuredPrograms =
+    query.trim().length >= 2
+      ? displayPrograms
+      : sortPrograms(
+          displayPrograms,
+          programPreferences.pinnedIds,
+          "platform",
+        ).slice(0, 4);
   const displayEpisodes = useMemo(() => {
     if (view === "history") {
       return history.map<Episode>((item) => ({
@@ -506,6 +669,9 @@ export function PlayerApp() {
 
   return (
     <main className="app-shell">
+      <div className="window-titlebar" aria-hidden="true">
+        <span className="window-titlebar-title">凹凸宇宙</span>
+      </div>
       <aside className="sidebar">
         <div className="brand-lockup">
           <div className="brand-mark" aria-hidden="true">
@@ -523,11 +689,17 @@ export function PlayerApp() {
 
         <nav className="side-nav" aria-label="主导航">
           <button
-            className={view === "discover" ? "active" : ""}
+            className={
+              view === "discover" &&
+              !episodeDrawerOpen &&
+              !programDrawerOpen
+                ? "active"
+                : ""
+            }
             type="button"
             onClick={() => {
               setView("discover");
-              setActiveProgram(null);
+              clearProgramContext();
               setQuery("");
               setSearching(false);
               setSearchPrograms([]);
@@ -538,11 +710,17 @@ export function PlayerApp() {
             发现节目
           </button>
           <button
-            className={view === "history" ? "active" : ""}
+            className={
+              view === "history" &&
+              !episodeDrawerOpen &&
+              !programDrawerOpen
+                ? "active"
+                : ""
+            }
             type="button"
             onClick={() => {
               setView("history");
-              setActiveProgram(null);
+              clearProgramContext();
               setQuery("");
               setSearching(false);
               setSearchPrograms([]);
@@ -551,6 +729,32 @@ export function PlayerApp() {
           >
             <span className="nav-glyph">历</span>
             收听历史
+          </button>
+          <button
+            className={programDrawerOpen ? "active" : ""}
+            type="button"
+            disabled={contentLoading && discovery.programs.length === 0}
+            onClick={() =>
+              programDrawerOpen
+                ? setProgramDrawerOpen(false)
+                : openProgramDrawer()
+            }
+          >
+            <span className="nav-glyph">栏</span>
+            全部栏目
+          </button>
+          <button
+            className={episodeDrawerOpen ? "active" : ""}
+            type="button"
+            disabled={!activeProgram && !current?.programId}
+            onClick={() =>
+              episodeDrawerOpen
+                ? setEpisodeDrawerOpen(false)
+                : openEpisodeDrawer()
+            }
+          >
+            <span className="nav-glyph">单</span>
+            栏节目单
           </button>
         </nav>
 
@@ -572,7 +776,7 @@ export function PlayerApp() {
                 </div>
                 <div>
                   <strong>{viewer.nickname}</strong>
-                  <span>{viewer.isVip ? "会员已连接" : "普通账号"}</span>
+                  <span>{viewer.isVip ? "凹凸宇宙已连接" : "普通账号"}</span>
                 </div>
                 {viewer.isVip && <b className="vip-badge">VIP</b>}
               </div>
@@ -616,7 +820,7 @@ export function PlayerApp() {
                   setSearching(true);
                 }
                 setView("discover");
-                setActiveProgram(null);
+                clearProgramContext();
               }}
             />
             {searching && <i className="search-spinner" aria-label="搜索中" />}
@@ -637,12 +841,12 @@ export function PlayerApp() {
             <section className="hero">
               <div className="hero-copy">
                 <div className="eyebrow">
-                  {viewer?.isVip ? "会员专属宇宙" : "公开精选"}
+                  {viewer?.isVip ? "凹凸宇宙会员" : "公开精选"}
                 </div>
-                <h1>{heroProgram?.title ?? "让耳朵先出发"}</h1>
+                <h1>{heroProgram?.title ?? "凹凸宇宙"}</h1>
                 <p>
                   {heroProgram?.description ??
-                    "在电脑上连接你的凹凸宇宙会员账号，继续收听 App 中的节目。"}
+                    "在电脑上连接凹凸宇宙，继续收听 App 中的节目。"}
                 </p>
                 <div className="hero-actions">
                   {displayEpisodes[0] && (
@@ -684,15 +888,25 @@ export function PlayerApp() {
             <section className="program-strip" aria-labelledby="program-heading">
               <div className="section-heading">
                 <div>
-                  <span className="eyebrow">节目宇宙</span>
+                  <span className="eyebrow">栏目宇宙</span>
                   <h2 id="program-heading">
-                    {query ? "相关节目" : "选择一个频道"}
+                    {query ? "相关栏目" : "精选栏目"}
                   </h2>
                 </div>
-                <span>{displayPrograms.length} 个节目</span>
+                {query ? (
+                  <span>{displayPrograms.length} 个栏目</span>
+                ) : (
+                  <button
+                    className="catalog-open-button"
+                    type="button"
+                    onClick={openProgramDrawer}
+                  >
+                    查看全部 {displayPrograms.length} 个栏目
+                  </button>
+                )}
               </div>
               <div className="program-grid">
-                {displayPrograms.map((program, index) => (
+                {featuredPrograms.map((program, index) => (
                   <button
                     className="program-card"
                     type="button"
@@ -735,26 +949,40 @@ export function PlayerApp() {
                 <h2 id="episode-heading">{pageTitle}</h2>
               </div>
               {activeProgram && (
-                <button
-                  className="text-button"
-                  type="button"
-                  onClick={() => {
-                    setActiveProgram(null);
-                    setProgramEpisodes([]);
-                  }}
-                >
-                  返回全部节目
-                </button>
+                <div className="section-heading-actions">
+                  <button
+                    className="secondary-button episode-drawer-trigger"
+                    type="button"
+                    onClick={openEpisodeDrawer}
+                  >
+                    节目单 · {programTotal || programEpisodes.length} 期
+                  </button>
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={clearProgramContext}
+                  >
+                    返回全部栏目
+                  </button>
+                </div>
               )}
             </div>
 
             {contentLoading || programLoading || searching ? (
               <LoadingRows />
-            ) : contentError ? (
+            ) : programError || (contentError && !activeProgram) ? (
               <div className="state-panel error-state">
                 <strong>节目暂时没有载入</strong>
-                <p>{contentError}</p>
-                <button className="secondary-button" type="button" onClick={loadDiscovery}>
+                <p>{programError || contentError}</p>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() =>
+                    activeProgram
+                      ? void selectProgram(activeProgram)
+                      : void loadDiscovery()
+                  }
+                >
                   重新连接
                 </button>
               </div>
@@ -766,7 +994,7 @@ export function PlayerApp() {
                 <p>
                   {view === "history"
                     ? "播放任意一期后，会在这里保留进度。"
-                    : "换一个关键词，或登录会员账号查看完整节目库。"}
+                    : "换一个关键词，或登录凹凸宇宙会员查看完整节目库。"}
                 </p>
               </div>
             ) : (
@@ -858,7 +1086,17 @@ export function PlayerApp() {
               />
               <div>
                 <strong>{current.title}</strong>
-                <span>{current.programTitle ?? "凹凸宇宙"}</span>
+                {current.programId ? (
+                  <button
+                    className="dock-program-link"
+                    type="button"
+                    onClick={openEpisodeDrawer}
+                  >
+                    {current.programTitle ?? "凹凸宇宙"} · 本栏节目单
+                  </button>
+                ) : (
+                  <span>{current.programTitle ?? "凹凸宇宙"}</span>
+                )}
               </div>
             </>
           ) : (
@@ -970,6 +1208,45 @@ export function PlayerApp() {
           </label>
         </div>
       </footer>
+
+      {programDrawerOpen && (
+        <ProgramDrawer
+          programs={discovery.programs}
+          activeProgramId={activeProgram?.id ?? current?.programId}
+          pinnedIds={programPreferences.pinnedIds}
+          sort={programPreferences.sort}
+          loading={contentLoading}
+          error={contentError}
+          onClose={() => setProgramDrawerOpen(false)}
+          onSelect={selectProgram}
+          onTogglePin={toggleProgramPin}
+          onSortChange={changeProgramSort}
+          onRetry={() => void loadDiscovery()}
+        />
+      )}
+
+      {episodeDrawerOpen && activeProgram && (
+        <EpisodeDrawer
+          key={activeProgram.id}
+          program={activeProgram}
+          episodes={programEpisodes}
+          history={history}
+          currentId={current?.id}
+          isPlaying={isPlaying}
+          busyEpisodeId={playerBusyId}
+          loading={programLoading}
+          loadingMore={programLoadingMore}
+          total={
+            programTotal ?? activeProgram.episodeCount ?? programEpisodes.length
+          }
+          hasMore={programHasMore}
+          error={programError}
+          onClose={() => setEpisodeDrawerOpen(false)}
+          onPlay={beginPlayback}
+          onRetry={() => void selectProgram(activeProgram)}
+          onLoadMore={() => void loadMoreProgramEpisodes()}
+        />
+      )}
 
       {notice && (
         <div className="toast" role="status" aria-live="polite">

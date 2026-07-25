@@ -40,6 +40,7 @@ export function toProgram(value: unknown): Program {
     coverUrl: imageProxyUrl(source.image || source.w_image),
     isVip: Number(source.is_vip) !== 0,
     episodeCount: number(source.items_count),
+    latestEpisodeAt: number(source.last_episode_time),
   };
 }
 

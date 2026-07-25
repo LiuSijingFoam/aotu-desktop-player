@@ -3,6 +3,7 @@ import type {
   DiscoveryPayload,
   Episode,
   Program,
+  ProgramPayload,
   SessionPayload,
 } from "./types";
 
@@ -64,9 +65,9 @@ export const playerApi = {
     request<{ programs: Program[]; episodes: Episode[] }>(
       `/api/search?q=${encodeURIComponent(query)}`,
     ),
-  program: (id: string) =>
-    request<{ program: Program; episodes: Episode[] }>(
-      `/api/program?id=${encodeURIComponent(id)}`,
+  program: (id: string, page = 1) =>
+    request<ProgramPayload>(
+      `/api/program?id=${encodeURIComponent(id)}&page=${encodeURIComponent(page)}`,
     ),
   episode: (id: string) =>
     request<{ episode: Episode }>(`/api/episode?id=${encodeURIComponent(id)}`),

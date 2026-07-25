@@ -44,6 +44,40 @@ const mockApiServer = createServer((request, response) => {
     );
     return;
   }
+  if (request.url?.endsWith("/v1.broadcast_api/castDetail")) {
+    response.end(
+      JSON.stringify({
+        code: 1,
+        data: {
+          id: 88,
+          name: "凹凸电波",
+          items_count: 3,
+          last_episode_time: 1_784_764_800,
+        },
+      }),
+    );
+    return;
+  }
+  if (request.url?.endsWith("/v1.broadcast_api/itemsByCast")) {
+    response.end(
+      JSON.stringify({
+        code: 1,
+        data: {
+          items: {
+            current_page: 1,
+            last_page: 1,
+            total: 3,
+            data: [
+              { id: 101, name: "第一期", broadcasting_id: 88 },
+              { id: 102, name: "第二期", broadcasting_id: 88 },
+              { id: 103, name: "第三期", broadcasting_id: 88 },
+            ],
+          },
+        },
+      }),
+    );
+    return;
+  }
   response.statusCode = 404;
   response.end(JSON.stringify({ code: 0, msg: "Not found" }));
 });
@@ -99,6 +133,8 @@ test("server-renders the private desktop player", async () => {
   assert.match(html, /桌面收听/);
   assert.match(html, /会员登录/);
   assert.match(html, /收听历史/);
+  assert.match(html, /全部栏目/);
+  assert.match(html, /栏节目单/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
@@ -110,6 +146,27 @@ test("exposes a minimal health check", async () => {
   );
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { status: "ok" });
+});
+
+test("returns a complete program list with pagination metadata", async () => {
+  const response = await (await worker()).fetch(
+    new Request("http://localhost/api/program?id=88&page=1"),
+    env,
+    context,
+  );
+  assert.equal(response.status, 200, await response.clone().text());
+  const payload = await response.json();
+  assert.equal(payload.program.title, "凹凸电波");
+  assert.equal(payload.program.latestEpisodeAt, 1_784_764_800);
+  assert.deepEqual(
+    payload.episodes.map((episode) => episode.id),
+    ["101", "102", "103"],
+  );
+  assert.deepEqual(payload.pagination, {
+    page: 1,
+    total: 3,
+    hasMore: false,
+  });
 });
 
 test("removes the starter preview and metadata", async () => {
@@ -134,7 +191,14 @@ test("filters anonymous VIP items from the public feed", async () => {
     return Response.json({
       code: 1,
       data: {
-        broad: [{ id: 10, name: "公开频道", image: "https://media.aotuyuzhou.com/cast.png" }],
+        broad: [
+          {
+            id: 10,
+            name: "公开频道",
+            image: "https://media.aotuyuzhou.com/cast.png",
+            last_episode_time: 1_784_678_400,
+          },
+        ],
         items: [
           {
             id: 1,
@@ -164,9 +228,56 @@ test("filters anonymous VIP items from the public feed", async () => {
     assert.equal(payload.source, "public");
     assert.deepEqual(payload.episodes.map((item) => item.id), ["1"]);
     assert.match(payload.programs[0].coverUrl, /^\/api\/image\?url=/);
+    assert.equal(payload.programs[0].latestEpisodeAt, 1_784_678_400);
   } finally {
     delegatedFetch = (...args) => nativeFetch(...args);
   }
+});
+
+test("keeps pinned programs first and sorts update times stably", async () => {
+  const {
+    parseProgramPreferences,
+    serializeProgramPreferences,
+    sortPrograms,
+  } = await import("../app/features/player/program-preferences.ts");
+  const programs = [
+    { id: "old", title: "乙栏目", latestEpisodeAt: 100, episodeCount: 20 },
+    { id: "unknown", title: "甲栏目", episodeCount: 80 },
+    { id: "new", title: "丙栏目", latestEpisodeAt: 300, episodeCount: 10 },
+    { id: "same", title: "丁栏目", latestEpisodeAt: 300, episodeCount: 10 },
+  ];
+
+  assert.deepEqual(
+    sortPrograms(programs, ["old"], "latest-desc").map((item) => item.id),
+    ["old", "new", "same", "unknown"],
+  );
+  assert.deepEqual(
+    sortPrograms(programs, [], "latest-asc").map((item) => item.id),
+    ["old", "new", "same", "unknown"],
+  );
+  assert.deepEqual(
+    sortPrograms(programs, ["unknown"], "episode-count").map((item) => item.id),
+    ["unknown", "old", "new", "same"],
+  );
+
+  const parsed = parseProgramPreferences(
+    JSON.stringify({
+      version: 1,
+      pinnedIds: ["new", "", "new", "old"],
+      sort: "latest-desc",
+    }),
+  );
+  assert.deepEqual(parsed.pinnedIds, ["new", "old"]);
+  assert.equal(parsed.sort, "latest-desc");
+  assert.deepEqual(parseProgramPreferences("{broken"), {
+    version: 1,
+    pinnedIds: [],
+    sort: "platform",
+  });
+  assert.deepEqual(
+    parseProgramPreferences(serializeProgramPreferences(parsed)),
+    parsed,
+  );
 });
 
 test("keeps the upstream token server-side and signs Range media requests", async () => {
