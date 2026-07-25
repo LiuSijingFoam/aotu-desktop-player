@@ -69,6 +69,6 @@ jobs:
           $existingNames = gh release view $tag --json assets --jq ".assets[].name"
           foreach ($assetName in $existingNames) {
             if ($assetName -notin $desiredNames) {
-              gh release delete-asset $tag $assetName --yes
+              gh release delete-asset $tag --yes -- $assetName
             }
           }
