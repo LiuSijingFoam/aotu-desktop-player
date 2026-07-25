@@ -11,6 +11,8 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
+import { createMemberSessionStore } from "./member-session-store.mjs";
+import { createSessionPersistence } from "./session-persistence.mjs";
 
 const { autoUpdater } = electronUpdater;
 const APP_NAME = "凹凸宇宙桌面收听";
@@ -49,6 +51,10 @@ let isQuitting = false;
 let windowOrigin;
 let windowOpenDevTools = false;
 let updateCheckPromise;
+let memberSessionStore;
+let desktopSessionPersistence;
+let quitStorageFlushed = false;
+let quitStorageFlushPromise;
 let updateState = {
   phase: app.isPackaged ? "idle" : "unsupported",
   currentVersion: app.getVersion(),
@@ -101,6 +107,74 @@ function trustedIpcSender(event) {
   } catch {
     return false;
   }
+}
+
+function setupDesktopSessionPersistence() {
+  desktopSessionPersistence = createSessionPersistence({
+    cookies: session.defaultSession.cookies,
+    flushStorageData: () => session.defaultSession.flushStorageData(),
+    onResult: ({ ok, reason, errors }) => {
+      logEvent(ok ? "info" : "error", "session-storage-flushed", {
+        reason,
+        ...(errors.length > 0 ? { detail: errors.join("; ") } : {}),
+      });
+    },
+  });
+  desktopSessionPersistence.start();
+}
+
+async function flushDesktopSessionStorage(reason) {
+  await memberSessionStore?.flush();
+  if (!desktopSessionPersistence) return;
+  await desktopSessionPersistence.flush(reason);
+}
+
+function memberSessionStorePath() {
+  return path.join(app.getPath("userData"), "member-session.bin");
+}
+
+async function removePrivateFile(filePath) {
+  try {
+    await fsPromises.rm(filePath);
+  } catch (error) {
+    if (
+      !error ||
+      typeof error !== "object" ||
+      !("code" in error) ||
+      error.code !== "ENOENT"
+    ) {
+      throw error;
+    }
+  }
+}
+
+async function setupMemberSessionStore() {
+  const storePath = memberSessionStorePath();
+  memberSessionStore = createMemberSessionStore({
+    cookies: session.defaultSession.cookies,
+    cookieUrl: `http://${LOOPBACK_HOST}`,
+    readEncrypted: () => fsPromises.readFile(storePath),
+    writeEncrypted: (encrypted) => writePrivateFile(storePath, encrypted),
+    removeEncrypted: () => removePrivateFile(storePath),
+    encrypt: (value) => safeStorage.encryptString(value),
+    decrypt: (encrypted) => safeStorage.decryptString(encrypted),
+    onResult: ({ operation, ok, detail }) => {
+      logEvent(ok ? "info" : "error", "member-session-store", {
+        operation,
+        ...(detail ? { detail } : {}),
+      });
+    },
+  });
+  const restored = await memberSessionStore.restore();
+  logEvent("info", "member-session-store-ready", {
+    status: restored.status,
+  });
+  memberSessionStore.start();
+}
+
+function closeLocalServer() {
+  localServer?.closeAllConnections?.();
+  localServer?.close();
 }
 
 async function checkForDesktopUpdate() {
@@ -228,7 +302,7 @@ function setupDesktopUpdateIpc() {
     if (!trustedIpcSender(event)) return null;
     return checkForDesktopUpdate();
   });
-  ipcMain.handle(UPDATE_INSTALL_CHANNEL, (event) => {
+  ipcMain.handle(UPDATE_INSTALL_CHANNEL, async (event) => {
     if (!trustedIpcSender(event) || updateState.phase !== "ready") {
       return false;
     }
@@ -236,6 +310,8 @@ function setupDesktopUpdateIpc() {
       currentVersion: app.getVersion(),
       latestVersion: updateState.latestVersion,
     });
+    await flushDesktopSessionStorage("update-install");
+    quitStorageFlushed = true;
     setImmediate(() => autoUpdater.quitAndInstall(false, true));
     return true;
   });
@@ -550,10 +626,22 @@ if (!hasSingleInstanceLock) {
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
   });
-  app.on("before-quit", () => {
+  app.on("before-quit", (event) => {
     isQuitting = true;
-    localServer?.closeAllConnections?.();
-    localServer?.close();
+    if (quitStorageFlushed || !desktopSessionPersistence) {
+      closeLocalServer();
+      return;
+    }
+
+    event.preventDefault();
+    if (quitStorageFlushPromise) return;
+    quitStorageFlushPromise = flushDesktopSessionStorage("before-quit").finally(
+      () => {
+        quitStorageFlushed = true;
+        closeLocalServer();
+        app.quit();
+      },
+    );
   });
   app.on("activate", () => {
     if (!mainWindow && windowOrigin) {
@@ -563,9 +651,11 @@ if (!hasSingleInstanceLock) {
 
   app
     .whenReady()
-    .then(() => {
+    .then(async () => {
       app.setName(APP_NAME);
       app.setAppUserModelId("com.personal.aotu.desktop");
+      await setupMemberSessionStore();
+      setupDesktopSessionPersistence();
       setupDesktopUpdateIpc();
       setupDesktopUpdates();
       return startDesktop();
