@@ -134,7 +134,7 @@ test("server-renders the private desktop player", async () => {
   assert.match(html, /会员登录/);
   assert.match(html, /收听历史/);
   assert.match(html, /全部栏目/);
-  assert.match(html, /栏节目单/);
+  assert.doesNotMatch(html, /栏节目单/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
@@ -183,22 +183,72 @@ test("removes the starter preview and metadata", async () => {
   assert.match(layout, /index:\s*false/);
 });
 
-test("filters anonymous VIP items from the public feed", async () => {
+test("loads every public program page and filters anonymous VIP items", async () => {
+  let programListRequestPage = 0;
+  let itemListRequestPage = 0;
   delegatedFetch = async (input, init) => {
-    const url = new URL(typeof input === "string" ? input : input.url);
-    assert.equal(url.hostname, "m.aotuyuzhou.com");
+    const url = new URL(
+      typeof input === "string" || input instanceof URL ? input : input.url,
+    );
+    if (url.pathname.endsWith("/v1.broadcast_api/list")) {
+      const page = ++programListRequestPage;
+      return Response.json({
+        code: 1,
+        data: {
+          total: 2,
+          per_page: 1,
+          current_page: page,
+          last_page: 2,
+          data:
+            page === 1
+              ? [{ id: 10, name: "公开频道" }]
+              : [{ id: 11, name: "更多频道" }],
+        },
+      });
+    }
+    if (url.pathname.endsWith("/v1.broadcast_api/items")) {
+      const page = ++itemListRequestPage;
+      return Response.json({
+        code: 1,
+        data: {
+          total: 3,
+          per_page: 2,
+          current_page: page,
+          last_page: 2,
+          data:
+            page === 1
+              ? [
+                  {
+                    id: 1,
+                    name: "公开频道单集",
+                    broadcasting_id: 10,
+                    is_vip: 0,
+                  },
+                  {
+                    id: 2,
+                    name: "会员频道单集",
+                    broadcasting_id: 11,
+                    is_vip: 1,
+                  },
+                ]
+              : [
+                  {
+                    id: 3,
+                    name: "公开频道的会员单集",
+                    broadcasting_id: 10,
+                    is_vip: 1,
+                  },
+                ],
+        },
+      });
+    }
+    if (url.hostname !== "m.aotuyuzhou.com") {
+      return nativeFetch(input, init);
+    }
     assert.equal(init.headers.Origin, "https://m.aotuyuzhou.com");
     return Response.json({
       code: 1,
       data: {
-        broad: [
-          {
-            id: 10,
-            name: "公开频道",
-            image: "https://media.aotuyuzhou.com/cast.png",
-            last_episode_time: 1_784_678_400,
-          },
-        ],
         items: [
           {
             id: 1,
@@ -223,12 +273,12 @@ test("filters anonymous VIP items from the public feed", async () => {
       env,
       context,
     );
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 200, await response.clone().text());
     const payload = await response.json();
     assert.equal(payload.source, "public");
     assert.deepEqual(payload.episodes.map((item) => item.id), ["1"]);
-    assert.match(payload.programs[0].coverUrl, /^\/api\/image\?url=/);
-    assert.equal(payload.programs[0].latestEpisodeAt, 1_784_678_400);
+    assert.deepEqual(payload.programs.map((item) => item.id), ["10", "11"]);
+    assert.deepEqual(payload.programs.map((item) => item.isVip), [false, true]);
   } finally {
     delegatedFetch = (...args) => nativeFetch(...args);
   }
@@ -278,6 +328,25 @@ test("keeps pinned programs first and sorts update times stably", async () => {
     parseProgramPreferences(serializeProgramPreferences(parsed)),
     parsed,
   );
+});
+
+test("does not infer VIP status from a program name or id", async () => {
+  const { toEpisode, toProgram } = await import("../app/server/mappers.ts");
+
+  assert.equal(toProgram({ id: 15, name: "凹凸电波" }).isVip, undefined);
+  assert.equal(
+    toProgram({ id: 60, name: "凹凸PLUS - 凹凸茶水间" }).isVip,
+    undefined,
+  );
+  assert.equal(
+    toProgram({ id: 36, name: "看開俱樂部 Ⅱ" }).isVip,
+    undefined,
+  );
+  assert.equal(
+    toProgram({ id: 60, name: "凹凸PLUS - 凹凸茶水间", is_vip: 0 }).isVip,
+    false,
+  );
+  assert.equal(toEpisode({ id: 1, name: "未标记单集" }).isVip, undefined);
 });
 
 test("keeps the upstream token server-side and signs Range media requests", async () => {

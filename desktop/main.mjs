@@ -13,6 +13,11 @@ import path from "node:path";
 const APP_NAME = "凹凸宇宙桌面收听";
 const LOOPBACK_HOST = "127.0.0.1";
 const ACCESS_HEADER = "x-aotu-desktop-key";
+
+// This is a dedicated audio player; a user selecting an episode should be
+// allowed to start playback after the app finishes resolving its stream URL.
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+
 const STATIC_CONTENT_TYPES = new Map([
   [".avif", "image/avif"],
   [".css", "text/css; charset=utf-8"],
@@ -34,6 +39,8 @@ const STATIC_CONTENT_TYPES = new Map([
 let mainWindow;
 let localServer;
 let isQuitting = false;
+let windowOrigin;
+let windowOpenDevTools = false;
 
 function logFilePath() {
   return path.join(app.getPath("userData"), "desktop.log");
@@ -241,8 +248,9 @@ function attachDesktopRequestKey(port, accessKey) {
   );
 }
 
-function createWindow(port) {
-  const origin = `http://${LOOPBACK_HOST}:${port}`;
+function createWindow(origin, { openDevTools = false } = {}) {
+  windowOrigin = origin;
+  windowOpenDevTools = openDevTools;
   mainWindow = new BrowserWindow({
     title: APP_NAME,
     width: 1440,
@@ -288,6 +296,9 @@ function createWindow(port) {
   });
   mainWindow.webContents.on("did-finish-load", () => {
     logEvent("info", "renderer-loaded");
+    if (openDevTools) {
+      mainWindow?.webContents.openDevTools({ mode: "detach" });
+    }
   });
   mainWindow.webContents.on("will-navigate", (event, targetUrl) => {
     if (new URL(targetUrl).origin !== origin) event.preventDefault();
@@ -301,9 +312,21 @@ function createWindow(port) {
 
 async function startDesktop() {
   await readRuntimeConfig();
-  process.env.AOTU_SESSION_SECRET = await loadSessionSecret();
   process.env.AOTU_COOKIE_SECURE = "0";
 
+  const developmentUrl = !app.isPackaged
+    ? process.env.AOTU_DESKTOP_DEV_URL?.trim()
+    : undefined;
+  if (developmentUrl) {
+    const origin = new URL(developmentUrl).origin;
+    logEvent("info", "development-server-connected", { origin });
+    createWindow(origin, {
+      openDevTools: process.env.AOTU_DESKTOP_OPEN_DEVTOOLS !== "0",
+    });
+    return;
+  }
+
+  process.env.AOTU_SESSION_SECRET = await loadSessionSecret();
   const outDir = serverOutputPath();
   if (!fs.existsSync(path.join(outDir, "server", "index.js"))) {
     throw new Error("缺少桌面应用构建产物，请先运行 npm run build。");
@@ -324,7 +347,7 @@ async function startDesktop() {
     host: LOOPBACK_HOST,
     port: started.port,
   });
-  createWindow(started.port);
+  createWindow(`http://${LOOPBACK_HOST}:${started.port}`);
 }
 
 function focusMainWindow() {
@@ -347,9 +370,8 @@ if (!hasSingleInstanceLock) {
     localServer?.close();
   });
   app.on("activate", () => {
-    if (!mainWindow && localServer?.listening) {
-      const address = localServer.address();
-      if (address && typeof address === "object") createWindow(address.port);
+    if (!mainWindow && windowOrigin) {
+      createWindow(windowOrigin, { openDevTools: windowOpenDevTools });
     }
   });
 

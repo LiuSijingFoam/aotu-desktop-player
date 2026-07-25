@@ -19,6 +19,11 @@ function record(value: unknown): JsonRecord {
     : {};
 }
 
+function optionalVip(value: unknown) {
+  if (value === undefined || value === null || value === "") return undefined;
+  return Number(value) !== 0;
+}
+
 export function imageProxyUrl(value: unknown) {
   const url = text(value);
   if (!url) return undefined;
@@ -33,12 +38,14 @@ export function imageProxyUrl(value: unknown) {
 
 export function toProgram(value: unknown): Program {
   const source = record(value);
+  const id = text(source.id);
+  const title = text(source.name, "未命名节目");
   return {
-    id: text(source.id),
-    title: text(source.name, "未命名节目"),
+    id,
+    title,
     description: text(source.desc || source.dec) || undefined,
     coverUrl: imageProxyUrl(source.image || source.w_image),
-    isVip: Number(source.is_vip) !== 0,
+    isVip: optionalVip(source.is_vip),
     episodeCount: number(source.items_count),
     latestEpisodeAt: number(source.last_episode_time),
   };
@@ -67,7 +74,7 @@ export function toEpisode(
     publishedAt:
       text(source.pubdate || source.createtime_text || source.createtime) ||
       undefined,
-    isVip: Number(source.is_vip) !== 0,
+    isVip: optionalVip(source.is_vip),
   };
 }
 

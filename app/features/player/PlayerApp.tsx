@@ -124,6 +124,32 @@ function Cover({
   );
 }
 
+function HeroArtwork({ program }: { program: Program | null }) {
+  const [failedSrc, setFailedSrc] = useState("");
+  const coverUrl = program?.coverUrl;
+
+  if (coverUrl && failedSrc !== coverUrl) {
+    return (
+      // Hero artwork is the selected program's catalog cover.
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        className="hero-cover"
+        src={coverUrl}
+        alt=""
+        loading="eager"
+        decoding="async"
+        onError={() => setFailedSrc(coverUrl)}
+      />
+    );
+  }
+
+  return (
+    <div className="hero-disc">
+      <span />
+    </div>
+  );
+}
+
 function LoadingRows() {
   return (
     <div className="episode-list" aria-label="正在加载节目">
@@ -257,6 +283,8 @@ export function PlayerApp() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const lastSavedRef = useRef(0);
   const programRequestRef = useRef(0);
+  const autoplayEpisodeIdRef = useRef("");
+  const autoplayInFlightRef = useRef(false);
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
   const [discovery, setDiscovery] = useState<DiscoveryPayload>({
@@ -438,26 +466,25 @@ export function PlayerApp() {
         return;
       }
 
+      autoplayEpisodeIdRef.current = episode.id;
       setPlayerBusyId(episode.id);
       try {
         const resolved = episode.audioUrl
           ? episode
           : (await playerApi.episode(episode.id)).episode;
+        if (autoplayEpisodeIdRef.current !== episode.id) return;
         if (!resolved.audioUrl) {
           throw new ApiError(409, "AUDIO_UNAVAILABLE", "该节目的音频地址暂不可用。");
         }
 
+        lastSavedRef.current = 0;
         setCurrent(resolved);
         setCurrentTime(0);
         setDuration(resolved.duration ?? 0);
-        window.setTimeout(() => {
-          const player = audioRef.current;
-          if (!player) return;
-          player
-            .play()
-            .catch(() => setNotice("音频已就绪，点击底部播放键开始。"));
-        }, 0);
       } catch (error) {
+        if (autoplayEpisodeIdRef.current === episode.id) {
+          autoplayEpisodeIdRef.current = "";
+        }
         if (error instanceof ApiError && [401, 403].includes(error.status)) {
           setLoginMessage("请先登录会员账号，再播放这期节目。");
           setLoginOpen(true);
@@ -743,19 +770,22 @@ export function PlayerApp() {
             <span className="nav-glyph">栏</span>
             全部栏目
           </button>
-          <button
-            className={episodeDrawerOpen ? "active" : ""}
-            type="button"
-            disabled={!activeProgram && !current?.programId}
-            onClick={() =>
-              episodeDrawerOpen
-                ? setEpisodeDrawerOpen(false)
-                : openEpisodeDrawer()
-            }
-          >
-            <span className="nav-glyph">单</span>
-            栏节目单
-          </button>
+          {(activeProgram || current?.programId) && (
+            <button
+              className={`episode-nav-entry ${
+                episodeDrawerOpen ? "active" : ""
+              }`}
+              type="button"
+              onClick={() =>
+                episodeDrawerOpen
+                  ? setEpisodeDrawerOpen(false)
+                  : openEpisodeDrawer()
+              }
+            >
+              <span className="nav-glyph">单</span>
+              节目单
+            </button>
+          )}
         </nav>
 
         <div className="sidebar-spacer" />
@@ -780,15 +810,19 @@ export function PlayerApp() {
                 </div>
                 {viewer.isVip && <b className="vip-badge">VIP</b>}
               </div>
-              <button className="text-button" type="button" onClick={logout}>
-                安全退出
+              <button
+                className="account-logout-button"
+                type="button"
+                onClick={logout}
+              >
+                退出
               </button>
             </>
           ) : (
             <>
-              <span className="account-kicker">你的会员内容</span>
-              <strong>登录后读取完整节目库</strong>
-              <p>官方短信验证，令牌仅保存在安全会话中。</p>
+              <span className="account-kicker">登录</span>
+              <strong>=͟͟͞͞ʕ•̫͡•ʔ=͟͟͞͞ʕ•̫͡•ʔ</strong>
+              <p>使用手机号-短信验证验证码登录</p>
               <button
                 className="primary-button"
                 type="button"
@@ -872,9 +906,7 @@ export function PlayerApp() {
               <div className="hero-art" aria-hidden="true">
                 <div className="orbit orbit-one" />
                 <div className="orbit orbit-two" />
-                <div className="hero-disc">
-                  <span />
-                </div>
+                <HeroArtwork program={heroProgram} />
                 <div className="sound-bars">
                   {Array.from({ length: 13 }).map((_, index) => (
                     <i key={index} style={{ "--bar": index } as React.CSSProperties} />
@@ -1005,7 +1037,23 @@ export function PlayerApp() {
                       current?.id === episode.id ? "current" : ""
                     }`}
                     key={episode.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`播放 ${episode.title}`}
                     style={{ "--index": index } as React.CSSProperties}
+                    onClick={(event) => {
+                      if ((event.target as HTMLElement).closest("button")) return;
+                      void beginPlayback(episode);
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        event.target === event.currentTarget &&
+                        ["Enter", " "].includes(event.key)
+                      ) {
+                        event.preventDefault();
+                        void beginPlayback(episode);
+                      }
+                    }}
                   >
                     <Cover
                       className="episode-cover"
@@ -1029,7 +1077,10 @@ export function PlayerApp() {
                       type="button"
                       aria-label={`播放 ${episode.title}`}
                       disabled={playerBusyId === episode.id}
-                      onClick={() => beginPlayback(episode)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void beginPlayback(episode);
+                      }}
                     >
                       {playerBusyId === episode.id
                         ? "…"
@@ -1060,7 +1111,32 @@ export function PlayerApp() {
             const saved = history.find((item) => item.id === current?.id);
             if (saved && saved.position < media.duration - 20) {
               media.currentTime = saved.position;
+              setCurrentTime(saved.position);
+              lastSavedRef.current = saved.position;
             }
+          }}
+          onCanPlay={(event) => {
+            if (
+              autoplayEpisodeIdRef.current !== current?.id ||
+              autoplayInFlightRef.current
+            ) {
+              return;
+            }
+            autoplayInFlightRef.current = true;
+            void event.currentTarget
+              .play()
+              .then(() => {
+                if (autoplayEpisodeIdRef.current === current?.id) {
+                  autoplayEpisodeIdRef.current = "";
+                }
+              })
+              .catch(() => {
+                autoplayEpisodeIdRef.current = "";
+                setNotice("自动播放未能启动，请点击底部播放键继续。");
+              })
+              .finally(() => {
+                autoplayInFlightRef.current = false;
+              });
           }}
           onTimeUpdate={(event) => {
             const media = event.currentTarget;

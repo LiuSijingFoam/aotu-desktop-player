@@ -1,6 +1,6 @@
 {
   "name": "aotu-desktop-player",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "main": "desktop/main.mjs",
   "engines": {
@@ -10,6 +10,7 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
+    "desktop:dev": "node scripts/desktop-dev.mjs",
     "desktop:run": "npm run build && npm run desktop:prepare && electron .",
     "desktop:prepare": "node scripts/prepare-desktop-runtime.mjs",
     "desktop:package": "npm run build && npm run desktop:prepare && electron-builder --win nsis",
