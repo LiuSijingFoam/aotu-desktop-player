@@ -20,6 +20,7 @@ import {
   type ProgramSort,
 } from "./program-preferences";
 import { ProgramDrawer } from "./ProgramDrawer";
+import { UpdateNotice } from "./UpdateNotice";
 import type {
   DiscoveryPayload,
   Episode,
@@ -789,6 +790,8 @@ export function PlayerApp() {
         </nav>
 
         <div className="sidebar-spacer" />
+
+        <UpdateNotice />
 
         <section className="account-panel">
           {sessionLoading ? (
