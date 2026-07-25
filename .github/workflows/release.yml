@@ -33,6 +33,8 @@ jobs:
         run: npm test
 
       - name: Prepare desktop runtime
+        env:
+          AOTU_MEDIA_SALT: ${{ secrets.AOTU_MEDIA_SALT }}
         run: npm run desktop:prepare
 
       - name: Build Windows installer
