@@ -44,7 +44,7 @@
   "build": {
     "appId": "com.personal.aotu.desktop",
     "productName": "凹凸宇宙桌面收听",
-    "artifactName": "${productName}-${version}-Windows-${arch}.${ext}",
+    "artifactName": "凹凸宇宙桌面收听-${version}-Windows-${arch}.${ext}",
     "asar": true,
     "directories": {
       "output": "release"
