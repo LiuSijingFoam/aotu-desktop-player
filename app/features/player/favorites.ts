@@ -18,12 +18,20 @@ export type FavoriteLibrary = {
   version: typeof FAVORITES_VERSION;
   items: FavoriteEpisode[];
   categories: FavoriteCategory[];
+  programOrder: string[];
+};
+
+export type FavoriteProgramGroup = {
+  id: string;
+  title: string;
+  items: FavoriteEpisode[];
 };
 
 export const EMPTY_FAVORITE_LIBRARY: FavoriteLibrary = {
   version: FAVORITES_VERSION,
   items: [],
   categories: [],
+  programOrder: [],
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -109,11 +117,17 @@ function normalizeLibrary(value: unknown): FavoriteLibrary | null {
     version: FAVORITES_VERSION,
     items,
     categories: categories.sort((left, right) => left.createdAt - right.createdAt),
+    programOrder: uniqueStrings(value.programOrder),
   };
 }
 
 function emptyLibrary(): FavoriteLibrary {
-  return { ...EMPTY_FAVORITE_LIBRARY, items: [], categories: [] };
+  return {
+    ...EMPTY_FAVORITE_LIBRARY,
+    items: [],
+    categories: [],
+    programOrder: [],
+  };
 }
 
 export function parseFavoriteLibrary(
@@ -213,4 +227,65 @@ export function setFavoriteCategory(
       return { ...item, categoryIds: [...ids] };
     }),
   };
+}
+
+export function favoriteProgramKey(
+  favorite: Pick<FavoriteEpisode, "programId" | "programTitle">,
+): string {
+  if (favorite.programId) return `id:${favorite.programId}`;
+  if (favorite.programTitle) return `title:${favorite.programTitle}`;
+  return "unknown";
+}
+
+export function groupFavoritesByProgram(
+  favorites: readonly FavoriteEpisode[],
+  preferredOrder: readonly string[] = [],
+): FavoriteProgramGroup[] {
+  const groups = new Map<string, FavoriteProgramGroup>();
+  for (const favorite of favorites) {
+    const id = favoriteProgramKey(favorite);
+    const group = groups.get(id) ?? {
+      id,
+      title: favorite.programTitle ?? "栏目未知",
+      items: [],
+    };
+    group.items.push(favorite);
+    groups.set(id, group);
+  }
+  const order = new Map(preferredOrder.map((id, index) => [id, index]));
+  return [...groups.values()]
+    .map((group, index) => ({ group, index }))
+    .sort((left, right) => {
+      const leftOrder = order.get(left.group.id);
+      const rightOrder = order.get(right.group.id);
+      if (leftOrder !== undefined && rightOrder !== undefined) {
+        return leftOrder - rightOrder;
+      }
+      if (leftOrder !== undefined) return -1;
+      if (rightOrder !== undefined) return 1;
+      return left.index - right.index;
+    })
+    .map(({ group }) => group);
+}
+
+export function reorderFavoritePrograms(
+  library: FavoriteLibrary,
+  sourceId: string,
+  targetId: string,
+  position: "before" | "after",
+): FavoriteLibrary {
+  if (sourceId === targetId) return library;
+  const currentOrder = groupFavoritesByProgram(
+    library.items,
+    library.programOrder,
+  ).map((group) => group.id);
+  if (!currentOrder.includes(sourceId) || !currentOrder.includes(targetId)) {
+    return library;
+  }
+
+  const nextOrder = currentOrder.filter((id) => id !== sourceId);
+  const targetIndex = nextOrder.indexOf(targetId);
+  const insertionIndex = position === "after" ? targetIndex + 1 : targetIndex;
+  nextOrder.splice(insertionIndex, 0, sourceId);
+  return { ...library, programOrder: nextOrder };
 }

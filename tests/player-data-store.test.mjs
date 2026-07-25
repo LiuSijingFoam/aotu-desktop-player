@@ -80,3 +80,30 @@ test("persists favorites and their custom categories", async () => {
   assert.equal(store.get("favorites"), favorites);
   assert.equal(JSON.parse(stored).favorites, favorites);
 });
+
+test("persists custom playlists in the desktop data store", async () => {
+  let stored = "";
+  const store = createPlayerDataStore({
+    read: async () => JSON.stringify({ version: 1 }),
+    write: async (value) => {
+      stored = value;
+    },
+  });
+  await store.load();
+
+  const playlists = JSON.stringify({
+    version: 1,
+    playlists: [
+      {
+        id: "commute",
+        name: "通勤",
+        createdAt: 1,
+        updatedAt: 2,
+        items: [{ id: "episode-1", title: "第一期", addedAt: 2 }],
+      },
+    ],
+  });
+  assert.equal(await store.set("playlists", playlists), true);
+  assert.equal(store.get("playlists"), playlists);
+  assert.equal(JSON.parse(stored).playlists, playlists);
+});

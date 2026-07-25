@@ -67,6 +67,12 @@ if (
   );
 }
 
+// Sites metadata is not part of the Windows desktop distribution.
+await fs.rm(path.join(projectRoot, "dist", ".openai"), {
+  recursive: true,
+  force: true,
+});
+
 const outputDir = path.join(projectRoot, ".desktop");
 await fs.mkdir(outputDir, { recursive: true });
 await fs.writeFile(

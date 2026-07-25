@@ -10,18 +10,37 @@ import {
 } from "react";
 import { ApiError, playerApi } from "./api-client";
 import { EpisodeDrawer } from "./EpisodeDrawer";
-import { FavoriteOrganizer } from "./FavoriteOrganizer";
 import {
   addFavorite,
-  createFavoriteCategory,
   EMPTY_FAVORITE_LIBRARY,
   FAVORITES_STORAGE_KEY,
+  groupFavoritesByProgram,
   parseFavoriteLibrary,
   removeFavorite,
+  reorderFavoritePrograms,
   serializeFavoriteLibrary,
-  setFavoriteCategory,
   type FavoriteLibrary,
 } from "./favorites";
+import { HeartButton } from "./HeartButton";
+import { PlaylistPicker } from "./PlaylistPicker";
+import {
+  createPlaylist,
+  deletePlaylist,
+  EMPTY_PLAYLIST_LIBRARY,
+  importPlaylist,
+  MAX_PLAYLISTS,
+  parsePlaylistLibrary,
+  PLAYLISTS_STORAGE_KEY,
+  removeEpisodeFromPlaylist,
+  renamePlaylist,
+  serializePlaylistLibrary,
+  setEpisodeInPlaylist,
+  SPECIAL_FAVORITES_PLAYLIST_ID,
+  type CustomPlaylist,
+  type PlaylistLibrary,
+} from "./playlists";
+import { PlaylistWorkspace } from "./PlaylistWorkspace";
+import { SpecialFavoritesPlaylist } from "./SpecialFavoritesPlaylist";
 import {
   DEFAULT_PROGRAM_PREFERENCES,
   parseProgramPreferences,
@@ -43,6 +62,12 @@ import type {
 
 const HISTORY_KEY = "aotu-desktop-history-v1";
 const PROGRESS_INTERVAL = 5;
+
+function createLocalId(prefix: string) {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
 
 function formatDuration(seconds?: number) {
   if (!seconds || !Number.isFinite(seconds)) return "--:--";
@@ -103,7 +128,7 @@ function parseHistory(value: unknown): HistoryEntry[] {
 }
 
 function persistDesktopData(
-  key: "history" | "programPreferences" | "favorites",
+  key: "history" | "programPreferences" | "favorites" | "playlists",
   value: unknown,
 ) {
   void window.aotuDesktop?.storage.set(key, value);
@@ -113,7 +138,12 @@ function readFavoriteLibrary() {
   try {
     return parseFavoriteLibrary(localStorage.getItem(FAVORITES_STORAGE_KEY));
   } catch {
-    return { ...EMPTY_FAVORITE_LIBRARY, items: [], categories: [] };
+    return {
+      ...EMPTY_FAVORITE_LIBRARY,
+      items: [],
+      categories: [],
+      programOrder: [],
+    };
   }
 }
 
@@ -125,6 +155,24 @@ function writeFavoriteLibrary(library: FavoriteLibrary) {
     // The desktop store remains available when browser storage is unavailable.
   }
   persistDesktopData("favorites", serialized);
+}
+
+function readPlaylistLibrary() {
+  try {
+    return parsePlaylistLibrary(localStorage.getItem(PLAYLISTS_STORAGE_KEY));
+  } catch {
+    return { ...EMPTY_PLAYLIST_LIBRARY, playlists: [] };
+  }
+}
+
+function writePlaylistLibrary(library: PlaylistLibrary) {
+  const serialized = serializePlaylistLibrary(library);
+  try {
+    localStorage.setItem(PLAYLISTS_STORAGE_KEY, serialized);
+  } catch {
+    // The desktop store remains available when browser storage is unavailable.
+  }
+  persistDesktopData("playlists", serialized);
 }
 
 function readProgramPreferences() {
@@ -375,14 +423,26 @@ export function PlayerApp() {
     ...EMPTY_FAVORITE_LIBRARY,
     items: [],
     categories: [],
+    programOrder: [],
   });
-  const [favoriteOrganizerId, setFavoriteOrganizerId] = useState("");
-  const [favoritesLayout, setFavoritesLayout] = useState<"list" | "columns">(
-    "list",
+  const [playlistLibrary, setPlaylistLibrary] = useState<PlaylistLibrary>({
+    ...EMPTY_PLAYLIST_LIBRARY,
+    playlists: [],
+  });
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState(
+    SPECIAL_FAVORITES_PLAYLIST_ID,
   );
+  const [playlistPickerEpisode, setPlaylistPickerEpisode] =
+    useState<Episode | null>(null);
+  const [playlistImporting, setPlaylistImporting] = useState(false);
+  const [playlistExportingId, setPlaylistExportingId] = useState("");
+  const [activeQueue, setActiveQueue] = useState<{
+    playlistId: string;
+    episodeIds: string[];
+  } | null>(null);
   const [favoriteCategoryFilter, setFavoriteCategoryFilter] = useState("all");
   const [view, setView] =
-    useState<"discover" | "history" | "favorites">("discover");
+    useState<"discover" | "history" | "playlists">("discover");
   const [current, setCurrent] = useState<Episode | null>(null);
   const [playerBusyId, setPlayerBusyId] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
@@ -413,20 +473,28 @@ export function PlayerApp() {
       const localHistory = readHistory();
       const localPreferences = readProgramPreferences();
       const localFavorites = readFavoriteLibrary();
+      const localPlaylists = readPlaylistLibrary();
       const storage = window.aotuDesktop?.storage;
       if (!storage) {
         setHistory(localHistory);
         setProgramPreferences(localPreferences);
         setFavoriteLibrary(localFavorites);
+        setPlaylistLibrary(localPlaylists);
         return;
       }
 
       try {
-        const [storedHistory, storedPreferences, storedFavorites] =
+        const [
+          storedHistory,
+          storedPreferences,
+          storedFavorites,
+          storedPlaylists,
+        ] =
           await Promise.all([
           storage.get<unknown>("history"),
           storage.get<unknown>("programPreferences"),
           storage.get<unknown>("favorites"),
+          storage.get<unknown>("playlists"),
         ]);
         const nextHistory =
           storedHistory === null ? localHistory : parseHistory(storedHistory);
@@ -438,10 +506,15 @@ export function PlayerApp() {
           typeof storedFavorites === "string"
             ? parseFavoriteLibrary(storedFavorites)
             : localFavorites;
+        const nextPlaylists =
+          typeof storedPlaylists === "string"
+            ? parsePlaylistLibrary(storedPlaylists)
+            : localPlaylists;
 
         setHistory(nextHistory);
         setProgramPreferences(nextPreferences);
         setFavoriteLibrary(nextFavorites);
+        setPlaylistLibrary(nextPlaylists);
         if (storedHistory === null && localHistory.length > 0) {
           persistDesktopData("history", localHistory);
         }
@@ -457,10 +530,17 @@ export function PlayerApp() {
             serializeFavoriteLibrary(localFavorites),
           );
         }
+        if (storedPlaylists === null) {
+          persistDesktopData(
+            "playlists",
+            serializePlaylistLibrary(localPlaylists),
+          );
+        }
       } catch {
         setHistory(localHistory);
         setProgramPreferences(localPreferences);
         setFavoriteLibrary(localFavorites);
+        setPlaylistLibrary(localPlaylists);
       }
     });
     Promise.allSettled([playerApi.session(), playerApi.discovery()]).then(
@@ -518,62 +598,161 @@ export function PlayerApp() {
     [],
   );
 
-  const saveFavorite = useCallback(
+  const toggleSpecialFavorite = useCallback(
     (episode: Episode) => {
       const alreadySaved = favoriteLibrary.items.some(
         (item) => item.id === episode.id,
       );
+      const resolvedProgramTitle =
+        episode.programTitle ??
+        discovery.programs.find(
+          (program) => program.id === episode.programId,
+        )?.title;
+      const favoriteEpisode =
+        resolvedProgramTitle && !episode.programTitle
+          ? { ...episode, programTitle: resolvedProgramTitle }
+          : episode;
+      updateFavoriteLibrary((library) =>
+        alreadySaved
+          ? removeFavorite(library, episode.id)
+          : addFavorite(library, favoriteEpisode),
+      );
       if (alreadySaved) {
-        setFavoriteOrganizerId(episode.id);
-        return;
+        setActiveQueue((queue) =>
+          queue?.playlistId === SPECIAL_FAVORITES_PLAYLIST_ID
+            ? {
+                ...queue,
+                episodeIds: queue.episodeIds.filter(
+                  (episodeId) => episodeId !== episode.id,
+                ),
+              }
+            : queue,
+        );
       }
-      updateFavoriteLibrary((library) => addFavorite(library, episode));
-      setNotice("已加入特别收藏，可随时分类整理。");
+      setNotice(
+        alreadySaved ? "已从特别收藏中移出。" : "已加入特别收藏。",
+      );
     },
-    [favoriteLibrary.items, updateFavoriteLibrary],
+    [discovery.programs, favoriteLibrary.items, updateFavoriteLibrary],
   );
 
-  const createCategory = useCallback(
-    (name: string) => {
+  const moveFavoriteProgram = useCallback(
+    (
+      sourceId: string,
+      targetId: string,
+      position: "before" | "after",
+    ) => {
+      updateFavoriteLibrary((library) =>
+        reorderFavoritePrograms(library, sourceId, targetId, position),
+      );
+    },
+    [updateFavoriteLibrary],
+  );
+
+  const updatePlaylistLibrary = useCallback(
+    (update: (library: PlaylistLibrary) => PlaylistLibrary) => {
+      setPlaylistLibrary((library) => {
+        const next = update(library);
+        writePlaylistLibrary(next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const createNewPlaylist = useCallback(
+    (name: string, initialEpisode?: Episode) => {
       const normalized = name.trim();
       if (!normalized) return;
-      const existing = favoriteLibrary.categories.find(
-        (category) =>
-          category.name.toLocaleLowerCase("zh-CN") ===
-          normalized.toLocaleLowerCase("zh-CN"),
-      );
-      if (existing) {
-        setNotice(`“${existing.name}”分类已经存在。`);
+      if (playlistLibrary.playlists.length >= MAX_PLAYLISTS) {
+        setNotice(`最多可创建 ${MAX_PLAYLISTS} 个播放列表。`);
         return;
       }
-      const id =
-        typeof crypto !== "undefined" && "randomUUID" in crypto
-          ? crypto.randomUUID()
-          : `favorite-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      updateFavoriteLibrary((library) =>
-        createFavoriteCategory(library, normalized, id),
-      );
-      setNotice(`已创建“${normalized.slice(0, 24)}”分类。`);
-    },
-    [favoriteLibrary.categories, updateFavoriteLibrary],
-  );
-
-  const removeSavedFavorite = useCallback(
-    (episodeId: string) => {
-      updateFavoriteLibrary((library) => removeFavorite(library, episodeId));
-      setFavoriteOrganizerId("");
-      setNotice("已从特别收藏中移除。");
-    },
-    [updateFavoriteLibrary],
-  );
-
-  const toggleFavoriteCategory = useCallback(
-    (episodeId: string, categoryId: string, selected: boolean) => {
-      updateFavoriteLibrary((library) =>
-        setFavoriteCategory(library, episodeId, categoryId, selected),
+      const id = createLocalId("playlist");
+      updatePlaylistLibrary((library) => {
+        const created = createPlaylist(library, normalized, id);
+        return initialEpisode
+          ? setEpisodeInPlaylist(created, id, initialEpisode, true)
+          : created;
+      });
+      setSelectedPlaylistId(id);
+      setNotice(
+        initialEpisode
+          ? `已新建“${normalized.slice(0, 32)}”并加入节目。`
+          : `已创建播放列表“${normalized.slice(0, 32)}”。`,
       );
     },
-    [updateFavoriteLibrary],
+    [playlistLibrary.playlists.length, updatePlaylistLibrary],
+  );
+
+  const toggleEpisodePlaylist = useCallback(
+    (playlistId: string, episode: Episode, selected: boolean) => {
+      updatePlaylistLibrary((library) =>
+        setEpisodeInPlaylist(library, playlistId, episode, selected),
+      );
+      setActiveQueue((queue) =>
+        !selected && queue?.playlistId === playlistId
+          ? {
+              ...queue,
+              episodeIds: queue.episodeIds.filter((id) => id !== episode.id),
+            }
+          : queue,
+      );
+      const playlist = playlistLibrary.playlists.find(
+        (item) => item.id === playlistId,
+      );
+      setNotice(
+        `${selected ? "已加入" : "已移出"}“${playlist?.name ?? "播放列表"}”。`,
+      );
+    },
+    [playlistLibrary.playlists, updatePlaylistLibrary],
+  );
+
+  const removePlaylistEpisode = useCallback(
+    (playlistId: string, episodeId: string) => {
+      updatePlaylistLibrary((library) =>
+        removeEpisodeFromPlaylist(library, playlistId, episodeId),
+      );
+      setActiveQueue((queue) =>
+        queue?.playlistId === playlistId
+          ? {
+              ...queue,
+              episodeIds: queue.episodeIds.filter((id) => id !== episodeId),
+            }
+          : queue,
+      );
+      setNotice("已从播放列表中移除。");
+    },
+    [updatePlaylistLibrary],
+  );
+
+  const renameCustomPlaylist = useCallback(
+    (playlistId: string, name: string) => {
+      updatePlaylistLibrary((library) =>
+        renamePlaylist(library, playlistId, name),
+      );
+      setNotice("播放列表已重命名。");
+    },
+    [updatePlaylistLibrary],
+  );
+
+  const removeCustomPlaylist = useCallback(
+    (playlist: CustomPlaylist) => {
+      if (!window.confirm(`确定删除播放列表“${playlist.name}”吗？`)) return;
+      updatePlaylistLibrary((library) =>
+        deletePlaylist(library, playlist.id),
+      );
+      setActiveQueue((queue) =>
+        queue?.playlistId === playlist.id ? null : queue,
+      );
+      setSelectedPlaylistId((currentId) =>
+        currentId === playlist.id
+          ? SPECIAL_FAVORITES_PLAYLIST_ID
+          : currentId,
+      );
+      setNotice(`已删除“${playlist.name}”。`);
+    },
+    [updatePlaylistLibrary],
   );
 
   useEffect(() => {
@@ -647,7 +826,8 @@ export function PlayerApp() {
   );
 
   const beginPlayback = useCallback(
-    async (episode: Episode) => {
+    async (episode: Episode, options?: { preserveQueue?: boolean }) => {
+      if (!options?.preserveQueue) setActiveQueue(null);
       const audio = audioRef.current;
       if (current?.id === episode.id && audio) {
         if (audio.paused) {
@@ -688,6 +868,90 @@ export function PlayerApp() {
       }
     },
     [current],
+  );
+
+  const playCustomPlaylist = useCallback(
+    (playlist: CustomPlaylist) => {
+      if (playlist.items.length === 0) {
+        setNotice("这个播放列表还没有节目。");
+        return;
+      }
+      setActiveQueue({
+        playlistId: playlist.id,
+        episodeIds: playlist.items.map((episode) => episode.id),
+      });
+      setSelectedPlaylistId(playlist.id);
+      void beginPlayback(playlist.items[0], { preserveQueue: true });
+    },
+    [beginPlayback],
+  );
+
+  const playNextInQueue = useCallback(() => {
+    if (!activeQueue || !current) return;
+    const playlistEpisodes =
+      activeQueue.playlistId === SPECIAL_FAVORITES_PLAYLIST_ID
+        ? favoriteLibrary.items
+        : playlistLibrary.playlists.find(
+            (item) => item.id === activeQueue.playlistId,
+          )?.items;
+    const currentIndex = activeQueue.episodeIds.indexOf(current.id);
+    const nextId = activeQueue.episodeIds[currentIndex + 1];
+    const nextEpisode = playlistEpisodes?.find((item) => item.id === nextId);
+    if (!nextEpisode) {
+      setActiveQueue(null);
+      return;
+    }
+    void beginPlayback(nextEpisode, { preserveQueue: true });
+  }, [
+    activeQueue,
+    beginPlayback,
+    current,
+    favoriteLibrary.items,
+    playlistLibrary.playlists,
+  ]);
+
+  const exportCustomPlaylist = useCallback(
+    async (playlist: CustomPlaylist) => {
+      setPlaylistExportingId(playlist.id);
+      try {
+        const { exportPlaylistImage } = await import("./playlist-image");
+        await exportPlaylistImage(playlist);
+        setNotice("播放列表图片已导出，二维码位于图片底部。");
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : errorMessage(error));
+      } finally {
+        setPlaylistExportingId("");
+      }
+    },
+    [],
+  );
+
+  const importCustomPlaylist = useCallback(
+    async (file: File) => {
+      if (playlistLibrary.playlists.length >= MAX_PLAYLISTS) {
+        setNotice(`最多可保存 ${MAX_PLAYLISTS} 个播放列表。`);
+        return;
+      }
+      setPlaylistImporting(true);
+      try {
+        const { importPlaylistImage } = await import("./playlist-image");
+        const shared = await importPlaylistImage(file);
+        const id = createLocalId("playlist-import");
+        updatePlaylistLibrary((library) =>
+          importPlaylist(library, shared, id),
+        );
+        setSelectedPlaylistId(id);
+        setView("playlists");
+        setNotice(
+          `已从图片导入“${shared.name}”，共 ${shared.items.length} 期节目。`,
+        );
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : errorMessage(error));
+      } finally {
+        setPlaylistImporting(false);
+      }
+    },
+    [playlistLibrary.playlists.length, updatePlaylistLibrary],
   );
 
   const clearProgramContext = useCallback(() => {
@@ -855,25 +1119,12 @@ export function PlayerApp() {
         isVip: item.isVip,
       }));
     }
-    if (view === "favorites") {
-      return favoriteLibrary.items
-        .filter((item) => {
-          if (favoriteCategoryFilter === "all") return true;
-          if (favoriteCategoryFilter === "uncategorized") {
-            return item.categoryIds.length === 0;
-          }
-          return item.categoryIds.includes(favoriteCategoryFilter);
-        })
-        .map<Episode>((item) => ({ ...item }));
-    }
     if (query.trim().length >= 2) return searchEpisodes;
     if (activeProgram) return programEpisodes;
     return discovery.episodes;
   }, [
     activeProgram,
     discovery.episodes,
-    favoriteCategoryFilter,
-    favoriteLibrary.items,
     history,
     programEpisodes,
     query,
@@ -885,14 +1136,8 @@ export function PlayerApp() {
   const pageTitle =
     view === "history"
       ? "最近收听"
-      : view === "favorites"
-        ? favoriteCategoryFilter === "all"
-          ? "特别收藏"
-          : favoriteCategoryFilter === "uncategorized"
-            ? "未分类"
-            : favoriteLibrary.categories.find(
-                (category) => category.id === favoriteCategoryFilter,
-              )?.name ?? "特别收藏"
+      : view === "playlists"
+        ? "播放列表"
       : query.trim().length >= 2
         ? `搜索“${query.trim()}”`
         : activeProgram?.title ?? "今天，听点有意思的";
@@ -900,27 +1145,74 @@ export function PlayerApp() {
     () => new Set(favoriteLibrary.items.map((item) => item.id)),
     [favoriteLibrary.items],
   );
-  const favoriteOrganizer =
-    favoriteLibrary.items.find((item) => item.id === favoriteOrganizerId) ?? null;
-  const favoriteColumns = useMemo(
-    () => [
-      ...favoriteLibrary.categories.map((category) => ({
-        id: category.id,
-        name: category.name,
-        items: favoriteLibrary.items.filter((item) =>
-          item.categoryIds.includes(category.id),
-        ),
-      })),
-      {
-        id: "uncategorized",
-        name: "未分类",
-        items: favoriteLibrary.items.filter(
-          (item) => item.categoryIds.length === 0,
-        ),
-      },
-    ],
-    [favoriteLibrary],
+  const programTitlesById = useMemo(
+    () =>
+      new Map(
+        discovery.programs.map((program) => [program.id, program.title]),
+      ),
+    [discovery.programs],
   );
+  const resolvedFavoriteItems = useMemo(
+    () =>
+      favoriteLibrary.items.map((item) => {
+        const resolvedProgramTitle =
+          item.programTitle ||
+          (item.programId
+            ? programTitlesById.get(item.programId)
+            : undefined);
+        return resolvedProgramTitle && !item.programTitle
+          ? { ...item, programTitle: resolvedProgramTitle }
+          : item;
+      }),
+    [favoriteLibrary.items, programTitlesById],
+  );
+  const specialFavoritesPlaylist = useMemo<CustomPlaylist>(
+    () => ({
+      id: SPECIAL_FAVORITES_PLAYLIST_ID,
+      name: "特别收藏",
+      createdAt: 0,
+      updatedAt: favoriteLibrary.items.reduce(
+        (latest, item) => Math.max(latest, item.savedAt),
+        0,
+      ),
+      items: resolvedFavoriteItems.map((item) => ({
+        id: item.id,
+        title: item.title,
+        ...(item.programId ? { programId: item.programId } : {}),
+        ...(item.programTitle ? { programTitle: item.programTitle } : {}),
+        ...(item.coverUrl ? { coverUrl: item.coverUrl } : {}),
+        ...(item.duration !== undefined ? { duration: item.duration } : {}),
+        ...(item.publishedAt ? { publishedAt: item.publishedAt } : {}),
+        ...(item.isVip !== undefined ? { isVip: item.isVip } : {}),
+        addedAt: item.savedAt,
+      })),
+    }),
+    [favoriteLibrary.items, resolvedFavoriteItems],
+  );
+  const favoriteProgramColumns = useMemo(
+    () =>
+      groupFavoritesByProgram(
+        resolvedFavoriteItems,
+        favoriteLibrary.programOrder,
+      ).map((group) => ({
+        id: group.id,
+        name: group.title,
+        items: group.items,
+      })),
+    [favoriteLibrary.programOrder, resolvedFavoriteItems],
+  );
+  const moveFavoriteProgramByOffset = (programId: string, offset: -1 | 1) => {
+    const currentIndex = favoriteProgramColumns.findIndex(
+      (column) => column.id === programId,
+    );
+    const target = favoriteProgramColumns[currentIndex + offset];
+    if (!target) return;
+    moveFavoriteProgram(
+      programId,
+      target.id,
+      offset < 0 ? "before" : "after",
+    );
+  };
 
   const togglePlay = () => {
     const audio = audioRef.current;
@@ -997,7 +1289,7 @@ export function PlayerApp() {
           </button>
           <button
             className={
-              view === "favorites" &&
+              view === "playlists" &&
               !episodeDrawerOpen &&
               !programDrawerOpen
                 ? "active"
@@ -1005,7 +1297,7 @@ export function PlayerApp() {
             }
             type="button"
             onClick={() => {
-              setView("favorites");
+              setView("playlists");
               clearProgramContext();
               setQuery("");
               setSearching(false);
@@ -1013,11 +1305,11 @@ export function PlayerApp() {
               setSearchEpisodes([]);
             }}
           >
-            <span className="nav-glyph">藏</span>
-            特别收藏
-            {favoriteLibrary.items.length > 0 && (
-              <span className="nav-count">{favoriteLibrary.items.length}</span>
-            )}
+            <span className="nav-glyph">列</span>
+            播放列表
+            <span className="nav-count">
+              {playlistLibrary.playlists.length + 1}
+            </span>
           </button>
           <button
             className={programDrawerOpen ? "active" : ""}
@@ -1230,139 +1522,68 @@ export function PlayerApp() {
             </section>
           )}
 
-          {view === "favorites" && favoriteLibrary.items.length > 0 && (
-            <section className="favorite-toolbar" aria-label="收藏排列方式">
-              <div className="favorite-filter-strip">
-                <button
-                  className={favoriteCategoryFilter === "all" ? "active" : ""}
-                  type="button"
-                  onClick={() => setFavoriteCategoryFilter("all")}
-                >
-                  全部 {favoriteLibrary.items.length}
-                </button>
-                {favoriteLibrary.categories.map((category) => {
-                  const count = favoriteLibrary.items.filter((item) =>
-                    item.categoryIds.includes(category.id),
-                  ).length;
-                  return (
-                    <button
-                      className={
-                        favoriteCategoryFilter === category.id ? "active" : ""
-                      }
-                      type="button"
-                      key={category.id}
-                      onClick={() => setFavoriteCategoryFilter(category.id)}
-                    >
-                      {category.name} {count}
-                    </button>
-                  );
-                })}
-                <button
-                  className={
-                    favoriteCategoryFilter === "uncategorized" ? "active" : ""
+          {view === "playlists" && (
+            <PlaylistWorkspace
+              library={playlistLibrary}
+              specialPlaylistId={SPECIAL_FAVORITES_PLAYLIST_ID}
+              specialPlaylistCount={favoriteLibrary.items.length}
+              specialContent={
+                <SpecialFavoritesPlaylist
+                  playlist={specialFavoritesPlaylist}
+                  columns={favoriteProgramColumns}
+                  activeFilter={favoriteCategoryFilter}
+                  currentEpisodeId={current?.id}
+                  busyEpisodeId={playerBusyId}
+                  activeQueue={
+                    activeQueue?.playlistId ===
+                    SPECIAL_FAVORITES_PLAYLIST_ID
                   }
-                  type="button"
-                  onClick={() => setFavoriteCategoryFilter("uncategorized")}
-                >
-                  未分类{" "}
-                  {
-                    favoriteLibrary.items.filter(
-                      (item) => item.categoryIds.length === 0,
-                    ).length
+                  exporting={
+                    playlistExportingId ===
+                    SPECIAL_FAVORITES_PLAYLIST_ID
                   }
-                </button>
-              </div>
-              <div className="favorite-layout-toggle">
-                <button
-                  className={favoritesLayout === "list" ? "active" : ""}
-                  type="button"
-                  aria-pressed={favoritesLayout === "list"}
-                  onClick={() => setFavoritesLayout("list")}
-                >
-                  列表
-                </button>
-                <button
-                  className={favoritesLayout === "columns" ? "active" : ""}
-                  type="button"
-                  aria-pressed={favoritesLayout === "columns"}
-                  onClick={() => setFavoritesLayout("columns")}
-                >
-                  分栏陈列
-                </button>
-              </div>
-            </section>
+                  onFilterChange={setFavoriteCategoryFilter}
+                  onPlay={(episode) => beginPlayback(episode)}
+                  onPlayAll={() =>
+                    playCustomPlaylist(specialFavoritesPlaylist)
+                  }
+                  onAddToPlaylist={setPlaylistPickerEpisode}
+                  onToggleFavorite={toggleSpecialFavorite}
+                  onExport={() =>
+                    void exportCustomPlaylist(specialFavoritesPlaylist)
+                  }
+                  onMoveProgram={moveFavoriteProgram}
+                  onMoveProgramByOffset={moveFavoriteProgramByOffset}
+                />
+              }
+              favoriteIds={favoriteIds}
+              selectedPlaylistId={selectedPlaylistId}
+              currentEpisodeId={current?.id}
+              busyEpisodeId={playerBusyId}
+              activeQueuePlaylistId={activeQueue?.playlistId ?? ""}
+              importing={playlistImporting}
+              exportingPlaylistId={playlistExportingId}
+              onSelect={setSelectedPlaylistId}
+              onCreate={(name) => createNewPlaylist(name)}
+              onRename={renameCustomPlaylist}
+              onDelete={removeCustomPlaylist}
+              onPlay={(episode) => beginPlayback(episode)}
+              onPlayAll={playCustomPlaylist}
+              onRemove={removePlaylistEpisode}
+              onOpenPicker={setPlaylistPickerEpisode}
+              onToggleFavorite={toggleSpecialFavorite}
+              onExport={(playlist) => void exportCustomPlaylist(playlist)}
+              onImport={(file) => void importCustomPlaylist(file)}
+            />
           )}
 
-          {view === "favorites" &&
-            favoritesLayout === "columns" &&
-            favoriteLibrary.items.length > 0 && (
-              <section className="favorite-board" aria-labelledby="favorite-board-title">
-                <div className="section-heading">
-                  <div>
-                    <span className="eyebrow">多分类陈列</span>
-                    <h2 id="favorite-board-title">我的收藏栏目</h2>
-                  </div>
-                  <span>{favoriteColumns.length} 个分类栏</span>
-                </div>
-                <div className="favorite-columns">
-                  {favoriteColumns.map((column) => (
-                    <section className="favorite-column" key={column.id}>
-                      <header>
-                        <strong>{column.name}</strong>
-                        <span>{column.items.length}</span>
-                      </header>
-                      {column.items.length === 0 ? (
-                        <p className="favorite-column-empty">
-                          从收藏节目中选择“整理”，即可放到这里。
-                        </p>
-                      ) : (
-                        <div>
-                          {column.items.map((favorite) => (
-                            <article className="favorite-mini-card" key={favorite.id}>
-                              <Cover
-                                className="favorite-mini-cover"
-                                src={favorite.coverUrl}
-                                title={favorite.title}
-                              />
-                              <div>
-                                <span>{favorite.programTitle ?? "凹凸宇宙"}</span>
-                                <strong>{favorite.title}</strong>
-                              </div>
-                              <div className="favorite-mini-actions">
-                                <button
-                                  type="button"
-                                  onClick={() => void beginPlayback(favorite)}
-                                >
-                                  播放
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setFavoriteOrganizerId(favorite.id)}
-                                >
-                                  整理
-                                </button>
-                              </div>
-                            </article>
-                          ))}
-                        </div>
-                      )}
-                    </section>
-                  ))}
-                </div>
-              </section>
-            )}
-
-          {(view !== "favorites" ||
-            favoritesLayout === "list" ||
-            favoriteLibrary.items.length === 0) && (
+          {view !== "playlists" && (
           <section className="episodes" aria-labelledby="episode-heading">
             <div className="section-heading">
               <div>
                 <span className="eyebrow">
                   {view === "history"
                     ? "仅保存在这台电脑"
-                    : view === "favorites"
-                      ? "保存在这台电脑 · 可多分类整理"
                     : activeProgram
                       ? "节目列表"
                       : query
@@ -1414,18 +1635,12 @@ export function PlayerApp() {
                 <strong>
                   {view === "history"
                     ? "还没有收听记录"
-                    : view === "favorites"
-                      ? "还没有特别收藏"
-                      : "没有找到相关节目"}
+                    : "没有找到相关节目"}
                 </strong>
                 <p>
                   {view === "history"
                     ? "播放任意一期后，会在这里保留进度。"
-                    : view === "favorites"
-                      ? favoriteCategoryFilter === "all"
-                        ? "在节目右侧点击“收藏”，喜欢的内容就会出现在这里。"
-                        : "这个分类里还没有节目，可从全部收藏中选择“整理”。"
-                      : "换一个关键词，或登录凹凸宇宙会员查看完整节目库。"}
+                    : "换一个关键词，或登录凹凸宇宙会员查看完整节目库。"}
                 </p>
               </div>
             ) : (
@@ -1473,21 +1688,24 @@ export function PlayerApp() {
                     </span>
                     <div className="episode-actions">
                       <button
-                        className={`favorite-button ${
-                          favoriteIds.has(episode.id) ? "saved" : ""
-                        }`}
+                        className="playlist-button"
                         type="button"
-                        aria-pressed={favoriteIds.has(episode.id)}
-                        aria-label={`${
-                          favoriteIds.has(episode.id) ? "整理收藏" : "收藏"
-                        } ${episode.title}`}
+                        aria-label={`将 ${episode.title} 加入播放列表`}
                         onClick={(event) => {
                           event.stopPropagation();
-                          saveFavorite(episode);
+                          setPlaylistPickerEpisode(episode);
                         }}
                       >
-                        {favoriteIds.has(episode.id) ? "整理" : "收藏"}
+                        加列表
                       </button>
+                      <HeartButton
+                        saved={favoriteIds.has(episode.id)}
+                        label={episode.title}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          toggleSpecialFavorite(episode);
+                        }}
+                      />
                       <button
                         className="round-play"
                         type="button"
@@ -1567,7 +1785,10 @@ export function PlayerApp() {
               persistHistory(current, media.currentTime, media.duration);
             }
           }}
-          onEnded={() => setIsPlaying(false)}
+          onEnded={() => {
+            setIsPlaying(false);
+            playNextInQueue();
+          }}
           onError={() => setNotice("音频加载失败，请重新选择这期节目。")}
         />
         <div className="now-playing">
@@ -1740,7 +1961,8 @@ export function PlayerApp() {
           onPlay={beginPlayback}
           onRetry={() => void selectProgram(activeProgram)}
           onLoadMore={() => void loadMoreProgramEpisodes()}
-          onSaveFavorite={saveFavorite}
+          onToggleFavorite={toggleSpecialFavorite}
+          onAddToPlaylist={setPlaylistPickerEpisode}
         />
       )}
 
@@ -1750,17 +1972,18 @@ export function PlayerApp() {
         </div>
       )}
 
-      {favoriteOrganizer && (
-        <FavoriteOrganizer
-          favorite={favoriteOrganizer}
-          categories={favoriteLibrary.categories}
-          onClose={() => setFavoriteOrganizerId("")}
-          onCreateCategory={createCategory}
-          onRemove={() => removeSavedFavorite(favoriteOrganizer.id)}
-          onToggleCategory={(categoryId, selected) =>
-            toggleFavoriteCategory(
-              favoriteOrganizer.id,
-              categoryId,
+      {playlistPickerEpisode && (
+        <PlaylistPicker
+          episode={playlistPickerEpisode}
+          playlists={playlistLibrary.playlists}
+          onClose={() => setPlaylistPickerEpisode(null)}
+          onCreate={(name) =>
+            createNewPlaylist(name, playlistPickerEpisode)
+          }
+          onToggle={(playlistId, selected) =>
+            toggleEpisodePlaylist(
+              playlistId,
+              playlistPickerEpisode,
               selected,
             )
           }

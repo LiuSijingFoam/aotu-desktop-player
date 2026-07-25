@@ -47,4 +47,5 @@ next-env.d.ts
 /.openai/
 /.desktop/
 /release/
+/.packaging-check*/
 .dev-server*.log

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { HeartButton } from "./HeartButton";
 import type { Episode, HistoryEntry, Program } from "./types";
 
 function formatDuration(seconds?: number) {
@@ -42,7 +43,8 @@ export function EpisodeDrawer({
   onPlay,
   onRetry,
   onLoadMore,
-  onSaveFavorite,
+  onToggleFavorite,
+  onAddToPlaylist,
 }: {
   program: Program;
   episodes: Episode[];
@@ -60,7 +62,8 @@ export function EpisodeDrawer({
   onPlay: (episode: Episode) => void | Promise<void>;
   onRetry: () => void;
   onLoadMore: () => void;
-  onSaveFavorite: (episode: Episode) => void;
+  onToggleFavorite: (episode: Episode) => void;
+  onAddToPlaylist: (episode: Episode) => void;
 }) {
   const [filter, setFilter] = useState("");
 
@@ -215,19 +218,22 @@ export function EpisodeDrawer({
                               : "播放"}
                       </span>
                     </button>
-                    <button
-                      className={`drawer-favorite-button ${
-                        favoriteIds.has(episode.id) ? "saved" : ""
-                      }`}
-                      type="button"
-                      aria-pressed={favoriteIds.has(episode.id)}
-                      aria-label={`${
-                        favoriteIds.has(episode.id) ? "整理收藏" : "收藏"
-                      } ${episode.title}`}
-                      onClick={() => onSaveFavorite(episode)}
-                    >
-                      {favoriteIds.has(episode.id) ? "已藏" : "收藏"}
-                    </button>
+                    <div className="drawer-episode-tools">
+                      <HeartButton
+                        className="drawer-heart-button"
+                        saved={favoriteIds.has(episode.id)}
+                        label={episode.title}
+                        onClick={() => onToggleFavorite(episode)}
+                      />
+                      <button
+                        className="drawer-playlist-button"
+                        type="button"
+                        aria-label={`将 ${episode.title} 加入播放列表`}
+                        onClick={() => onAddToPlaylist(episode)}
+                      >
+                        加列表
+                      </button>
+                    </div>
                   </li>
                 );
               })}

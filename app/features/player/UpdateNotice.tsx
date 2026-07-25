@@ -31,10 +31,10 @@ type DesktopUpdateApi = {
 
 type DesktopStorageApi = {
   get: <T>(
-    key: "history" | "programPreferences" | "favorites",
+    key: "history" | "programPreferences" | "favorites" | "playlists",
   ) => Promise<T | null>;
   set: (
-    key: "history" | "programPreferences" | "favorites",
+    key: "history" | "programPreferences" | "favorites" | "playlists",
     value: unknown,
   ) => Promise<boolean>;
 };

@@ -17,7 +17,7 @@ test("packages the GitHub updater and its isolated preload bridge", async () => 
   ]);
   const packageJson = JSON.parse(packageSource);
 
-  assert.equal(packageJson.version, "0.3.3");
+  assert.equal(packageJson.version, "0.4.0");
   assert.equal(packageJson.dependencies["electron-updater"], "^6.6.2");
   assert.deepEqual(packageJson.build.publish, [
     {
@@ -40,6 +40,23 @@ test("packages the GitHub updater and its isolated preload bridge", async () => 
   assert.match(preloadSource, /desktop-data:get/);
   assert.doesNotMatch(preloadSource, /\bimport\s/);
   assert.doesNotMatch(preloadSource, /executeJavaScript|shell|fs|child_process/);
+});
+
+test("builds tagged GitHub releases as Windows installers without Sites metadata", async () => {
+  const [workflowSource, prepareSource, viteSource] = await Promise.all([
+    readFile(new URL(".github/workflows/release.yml", projectRoot), "utf8"),
+    readFile(
+      new URL("scripts/prepare-desktop-runtime.mjs", projectRoot),
+      "utf8",
+    ),
+    readFile(new URL("vite.config.ts", projectRoot), "utf8"),
+  ]);
+
+  assert.match(workflowSource, /tags:\s*\r?\n\s+- "v\*"/);
+  assert.match(workflowSource, /electron-builder -- --win nsis/);
+  assert.match(workflowSource, /gh release (create|upload)/);
+  assert.match(prepareSource, /"dist", "\.openai"/);
+  assert.doesNotMatch(viteSource, /sites-vite-plugin|sites\(\)/);
 });
 
 test("flushes the member session cookie immediately and again before quit", async () => {

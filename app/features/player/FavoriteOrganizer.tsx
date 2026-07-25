@@ -52,6 +52,11 @@ export function FavoriteOrganizer({
         <p>
           可同时放入多个分类；不选择分类时，这期节目会留在“未分类”。
         </p>
+        <div className="favorite-program-source">
+          <span>所属栏目</span>
+          <strong>{favorite.programTitle ?? "栏目未知"}</strong>
+          <small>系统会自动按这个栏目归类</small>
+        </div>
 
         <div className="favorite-category-checks">
           {categories.length === 0 ? (

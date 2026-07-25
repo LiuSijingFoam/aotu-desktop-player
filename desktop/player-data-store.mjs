@@ -1,5 +1,10 @@
 const STORE_VERSION = 1;
-const ALLOWED_KEYS = new Set(["history", "programPreferences", "favorites"]);
+const ALLOWED_KEYS = new Set([
+  "history",
+  "programPreferences",
+  "favorites",
+  "playlists",
+]);
 const MAX_VALUE_BYTES = 512 * 1024;
 
 function emptyState() {
@@ -8,6 +13,7 @@ function emptyState() {
     history: null,
     programPreferences: null,
     favorites: null,
+    playlists: null,
   };
 }
 
@@ -32,6 +38,7 @@ export function createPlayerDataStore({ read, write, onResult = () => {} }) {
         history: clone(parsed.history),
         programPreferences: clone(parsed.programPreferences),
         favorites: clone(parsed.favorites),
+        playlists: clone(parsed.playlists),
       };
       onResult({ operation: "load", ok: true });
     } catch (error) {
