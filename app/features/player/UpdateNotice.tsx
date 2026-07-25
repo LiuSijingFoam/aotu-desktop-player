@@ -29,10 +29,19 @@ type DesktopUpdateApi = {
   onStatus: (listener: (status: DesktopUpdateState) => void) => () => void;
 };
 
+type DesktopStorageApi = {
+  get: <T>(key: "history" | "programPreferences") => Promise<T | null>;
+  set: (
+    key: "history" | "programPreferences",
+    value: unknown,
+  ) => Promise<boolean>;
+};
+
 declare global {
   interface Window {
     aotuDesktop?: {
       updates: DesktopUpdateApi;
+      storage: DesktopStorageApi;
     };
   }
 }
