@@ -17,7 +17,7 @@ test("packages the GitHub updater and its isolated preload bridge", async () => 
   ]);
   const packageJson = JSON.parse(packageSource);
 
-  assert.equal(packageJson.version, "0.3.1");
+  assert.equal(packageJson.version, "0.3.2");
   assert.equal(packageJson.dependencies["electron-updater"], "^6.6.2");
   assert.deepEqual(packageJson.build.publish, [
     {
@@ -78,7 +78,7 @@ test("flushes the member session cookie immediately and again before quit", asyn
   stop();
 });
 
-test("shows update progress and a restart-to-install action in the sidebar", async () => {
+test("always shows the app version and update controls in the sidebar", async () => {
   const [playerSource, noticeSource] = await Promise.all([
     readFile(
       new URL("app/features/player/PlayerApp.tsx", projectRoot),
@@ -91,6 +91,9 @@ test("shows update progress and a restart-to-install action in the sidebar", asy
   ]);
 
   assert.match(playerSource, /<UpdateNotice \/>/);
+  assert.match(noticeSource, /应用版本/);
+  assert.match(noticeSource, /已是最新版本/);
+  assert.match(noticeSource, /检查更新/);
   assert.match(noticeSource, /role="progressbar"/);
   assert.match(noticeSource, /立即重启更新/);
   assert.match(noticeSource, /重新下载/);
