@@ -2,17 +2,24 @@ import {
   app,
   BrowserWindow,
   dialog,
+  ipcMain,
   safeStorage,
   session,
 } from "electron";
+import electronUpdater from "electron-updater";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import path from "node:path";
 
+const { autoUpdater } = electronUpdater;
 const APP_NAME = "凹凸宇宙桌面收听";
 const LOOPBACK_HOST = "127.0.0.1";
 const ACCESS_HEADER = "x-aotu-desktop-key";
+const UPDATE_STATUS_CHANNEL = "desktop-update:status";
+const UPDATE_GET_STATUS_CHANNEL = "desktop-update:get-status";
+const UPDATE_CHECK_CHANNEL = "desktop-update:check";
+const UPDATE_INSTALL_CHANNEL = "desktop-update:install";
 
 // This is a dedicated audio player; a user selecting an episode should be
 // allowed to start playback after the app finishes resolving its stream URL.
@@ -41,6 +48,16 @@ let localServer;
 let isQuitting = false;
 let windowOrigin;
 let windowOpenDevTools = false;
+let updateCheckPromise;
+let updateState = {
+  phase: app.isPackaged ? "idle" : "unsupported",
+  currentVersion: app.getVersion(),
+  latestVersion: null,
+  percent: null,
+  transferred: null,
+  total: null,
+  errorMessage: null,
+};
 
 function logFilePath() {
   return path.join(app.getPath("userData"), "desktop.log");
@@ -54,6 +71,174 @@ function logEvent(level, event, details = {}) {
     ...details,
   });
   fs.appendFile(logFilePath(), `${entry}\n`, () => {});
+}
+
+function publicUpdateState() {
+  return { ...updateState };
+}
+
+function publishUpdateState(nextState) {
+  updateState = { ...updateState, ...nextState };
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.webContents.send(UPDATE_STATUS_CHANNEL, publicUpdateState());
+    }
+  }
+}
+
+function updateErrorMessage(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/net::|network|timed? ?out|internet|ENOTFOUND|ECONN/i.test(message)) {
+    return "网络连接不稳定，暂时无法完成更新。";
+  }
+  return "更新暂时未能完成，请稍后重试。";
+}
+
+function trustedIpcSender(event) {
+  if (!windowOrigin) return false;
+  try {
+    return new URL(event.senderFrame.url).origin === windowOrigin;
+  } catch {
+    return false;
+  }
+}
+
+async function checkForDesktopUpdate() {
+  if (!app.isPackaged) return publicUpdateState();
+  if (updateCheckPromise) return updateCheckPromise;
+
+  publishUpdateState({
+    phase: "checking",
+    errorMessage: null,
+  });
+  updateCheckPromise = autoUpdater
+    .checkForUpdates()
+    .catch((error) => {
+      logEvent("error", "update-check-failed", {
+        detail: error instanceof Error ? error.message : String(error),
+      });
+      publishUpdateState({
+        phase: "error",
+        errorMessage: updateErrorMessage(error),
+      });
+      return null;
+    })
+    .finally(() => {
+      updateCheckPromise = undefined;
+    });
+  await updateCheckPromise;
+  return publicUpdateState();
+}
+
+function setupDesktopUpdates() {
+  if (!app.isPackaged) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.logger = {
+    info: (...details) =>
+      logEvent("info", "auto-updater", { detail: details.join(" ") }),
+    warn: (...details) =>
+      logEvent("warn", "auto-updater", { detail: details.join(" ") }),
+    error: (...details) =>
+      logEvent("error", "auto-updater", { detail: details.join(" ") }),
+    debug: (...details) =>
+      logEvent("info", "auto-updater-debug", { detail: details.join(" ") }),
+  };
+
+  autoUpdater.on("checking-for-update", () => {
+    publishUpdateState({
+      phase: "checking",
+      errorMessage: null,
+    });
+  });
+  autoUpdater.on("update-available", (info) => {
+    logEvent("info", "update-available", {
+      currentVersion: app.getVersion(),
+      latestVersion: info.version,
+    });
+    publishUpdateState({
+      phase: "available",
+      latestVersion: info.version,
+      percent: 0,
+      transferred: 0,
+      total: null,
+      errorMessage: null,
+    });
+  });
+  autoUpdater.on("update-not-available", (info) => {
+    logEvent("info", "update-not-available", {
+      currentVersion: app.getVersion(),
+      latestVersion: info.version,
+    });
+    publishUpdateState({
+      phase: "up-to-date",
+      latestVersion: info.version,
+      percent: null,
+      transferred: null,
+      total: null,
+      errorMessage: null,
+    });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    publishUpdateState({
+      phase: "downloading",
+      percent: Math.max(0, Math.min(100, progress.percent)),
+      transferred: progress.transferred,
+      total: progress.total,
+      errorMessage: null,
+    });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    logEvent("info", "update-downloaded", {
+      currentVersion: app.getVersion(),
+      latestVersion: info.version,
+    });
+    publishUpdateState({
+      phase: "ready",
+      latestVersion: info.version,
+      percent: 100,
+      transferred: null,
+      total: null,
+      errorMessage: null,
+    });
+  });
+  autoUpdater.on("error", (error) => {
+    logEvent("error", "auto-updater-error", {
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    publishUpdateState({
+      phase: "error",
+      errorMessage: updateErrorMessage(error),
+    });
+  });
+
+  setTimeout(() => {
+    void checkForDesktopUpdate();
+  }, 3_000);
+}
+
+function setupDesktopUpdateIpc() {
+  ipcMain.handle(UPDATE_GET_STATUS_CHANNEL, (event) => {
+    if (!trustedIpcSender(event)) return null;
+    return publicUpdateState();
+  });
+  ipcMain.handle(UPDATE_CHECK_CHANNEL, (event) => {
+    if (!trustedIpcSender(event)) return null;
+    return checkForDesktopUpdate();
+  });
+  ipcMain.handle(UPDATE_INSTALL_CHANNEL, (event) => {
+    if (!trustedIpcSender(event) || updateState.phase !== "ready") {
+      return false;
+    }
+    logEvent("info", "update-install-requested", {
+      currentVersion: app.getVersion(),
+      latestVersion: updateState.latestVersion,
+    });
+    setImmediate(() => autoUpdater.quitAndInstall(false, true));
+    return true;
+  });
 }
 
 function runtimeConfigPath() {
@@ -275,6 +460,7 @@ function createWindow(origin, { openDevTools = false } = {}) {
       nodeIntegration: false,
       sandbox: true,
       devTools: !app.isPackaged,
+      preload: path.join(app.getAppPath(), "desktop", "preload.mjs"),
     },
   });
 
@@ -380,6 +566,8 @@ if (!hasSingleInstanceLock) {
     .then(() => {
       app.setName(APP_NAME);
       app.setAppUserModelId("com.personal.aotu.desktop");
+      setupDesktopUpdateIpc();
+      setupDesktopUpdates();
       return startDesktop();
     })
     .catch(async (error) => {
