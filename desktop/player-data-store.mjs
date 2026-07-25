@@ -1,5 +1,5 @@
 const STORE_VERSION = 1;
-const ALLOWED_KEYS = new Set(["history", "programPreferences"]);
+const ALLOWED_KEYS = new Set(["history", "programPreferences", "favorites"]);
 const MAX_VALUE_BYTES = 512 * 1024;
 
 function emptyState() {
@@ -7,6 +7,7 @@ function emptyState() {
     version: STORE_VERSION,
     history: null,
     programPreferences: null,
+    favorites: null,
   };
 }
 
@@ -30,6 +31,7 @@ export function createPlayerDataStore({ read, write, onResult = () => {} }) {
         ...emptyState(),
         history: clone(parsed.history),
         programPreferences: clone(parsed.programPreferences),
+        favorites: clone(parsed.favorites),
       };
       onResult({ operation: "load", ok: true });
     } catch (error) {

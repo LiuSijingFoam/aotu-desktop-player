@@ -60,3 +60,23 @@ test("rejects unknown or oversized desktop data", async () => {
     false,
   );
 });
+
+test("persists favorites and their custom categories", async () => {
+  let stored = "";
+  const store = createPlayerDataStore({
+    read: async () => JSON.stringify({ version: 1 }),
+    write: async (value) => {
+      stored = value;
+    },
+  });
+  await store.load();
+
+  const favorites = JSON.stringify({
+    version: 1,
+    items: [{ id: "episode-7", title: "特别的一期", categoryIds: ["commute"] }],
+    categories: [{ id: "commute", name: "通勤路上", createdAt: 1 }],
+  });
+  assert.equal(await store.set("favorites", favorites), true);
+  assert.equal(store.get("favorites"), favorites);
+  assert.equal(JSON.parse(stored).favorites, favorites);
+});

@@ -10,6 +10,18 @@ import {
 } from "react";
 import { ApiError, playerApi } from "./api-client";
 import { EpisodeDrawer } from "./EpisodeDrawer";
+import { FavoriteOrganizer } from "./FavoriteOrganizer";
+import {
+  addFavorite,
+  createFavoriteCategory,
+  EMPTY_FAVORITE_LIBRARY,
+  FAVORITES_STORAGE_KEY,
+  parseFavoriteLibrary,
+  removeFavorite,
+  serializeFavoriteLibrary,
+  setFavoriteCategory,
+  type FavoriteLibrary,
+} from "./favorites";
 import {
   DEFAULT_PROGRAM_PREFERENCES,
   parseProgramPreferences,
@@ -91,10 +103,28 @@ function parseHistory(value: unknown): HistoryEntry[] {
 }
 
 function persistDesktopData(
-  key: "history" | "programPreferences",
+  key: "history" | "programPreferences" | "favorites",
   value: unknown,
 ) {
   void window.aotuDesktop?.storage.set(key, value);
+}
+
+function readFavoriteLibrary() {
+  try {
+    return parseFavoriteLibrary(localStorage.getItem(FAVORITES_STORAGE_KEY));
+  } catch {
+    return { ...EMPTY_FAVORITE_LIBRARY, items: [], categories: [] };
+  }
+}
+
+function writeFavoriteLibrary(library: FavoriteLibrary) {
+  const serialized = serializeFavoriteLibrary(library);
+  try {
+    localStorage.setItem(FAVORITES_STORAGE_KEY, serialized);
+  } catch {
+    // The desktop store remains available when browser storage is unavailable.
+  }
+  persistDesktopData("favorites", serialized);
 }
 
 function readProgramPreferences() {
@@ -341,7 +371,18 @@ export function PlayerApp() {
   const [searchPrograms, setSearchPrograms] = useState<Program[]>([]);
   const [searchEpisodes, setSearchEpisodes] = useState<Episode[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [view, setView] = useState<"discover" | "history">("discover");
+  const [favoriteLibrary, setFavoriteLibrary] = useState<FavoriteLibrary>({
+    ...EMPTY_FAVORITE_LIBRARY,
+    items: [],
+    categories: [],
+  });
+  const [favoriteOrganizerId, setFavoriteOrganizerId] = useState("");
+  const [favoritesLayout, setFavoritesLayout] = useState<"list" | "columns">(
+    "list",
+  );
+  const [favoriteCategoryFilter, setFavoriteCategoryFilter] = useState("all");
+  const [view, setView] =
+    useState<"discover" | "history" | "favorites">("discover");
   const [current, setCurrent] = useState<Episode | null>(null);
   const [playerBusyId, setPlayerBusyId] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
@@ -371,17 +412,21 @@ export function PlayerApp() {
     queueMicrotask(async () => {
       const localHistory = readHistory();
       const localPreferences = readProgramPreferences();
+      const localFavorites = readFavoriteLibrary();
       const storage = window.aotuDesktop?.storage;
       if (!storage) {
         setHistory(localHistory);
         setProgramPreferences(localPreferences);
+        setFavoriteLibrary(localFavorites);
         return;
       }
 
       try {
-        const [storedHistory, storedPreferences] = await Promise.all([
+        const [storedHistory, storedPreferences, storedFavorites] =
+          await Promise.all([
           storage.get<unknown>("history"),
           storage.get<unknown>("programPreferences"),
+          storage.get<unknown>("favorites"),
         ]);
         const nextHistory =
           storedHistory === null ? localHistory : parseHistory(storedHistory);
@@ -389,9 +434,14 @@ export function PlayerApp() {
           typeof storedPreferences === "string"
             ? parseProgramPreferences(storedPreferences)
             : localPreferences;
+        const nextFavorites =
+          typeof storedFavorites === "string"
+            ? parseFavoriteLibrary(storedFavorites)
+            : localFavorites;
 
         setHistory(nextHistory);
         setProgramPreferences(nextPreferences);
+        setFavoriteLibrary(nextFavorites);
         if (storedHistory === null && localHistory.length > 0) {
           persistDesktopData("history", localHistory);
         }
@@ -401,9 +451,16 @@ export function PlayerApp() {
             serializeProgramPreferences(localPreferences),
           );
         }
+        if (storedFavorites === null) {
+          persistDesktopData(
+            "favorites",
+            serializeFavoriteLibrary(localFavorites),
+          );
+        }
       } catch {
         setHistory(localHistory);
         setProgramPreferences(localPreferences);
+        setFavoriteLibrary(localFavorites);
       }
     });
     Promise.allSettled([playerApi.session(), playerApi.discovery()]).then(
@@ -449,6 +506,75 @@ export function PlayerApp() {
       return nextPreferences;
     });
   }, []);
+
+  const updateFavoriteLibrary = useCallback(
+    (update: (library: FavoriteLibrary) => FavoriteLibrary) => {
+      setFavoriteLibrary((library) => {
+        const next = update(library);
+        writeFavoriteLibrary(next);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const saveFavorite = useCallback(
+    (episode: Episode) => {
+      const alreadySaved = favoriteLibrary.items.some(
+        (item) => item.id === episode.id,
+      );
+      if (alreadySaved) {
+        setFavoriteOrganizerId(episode.id);
+        return;
+      }
+      updateFavoriteLibrary((library) => addFavorite(library, episode));
+      setNotice("已加入特别收藏，可随时分类整理。");
+    },
+    [favoriteLibrary.items, updateFavoriteLibrary],
+  );
+
+  const createCategory = useCallback(
+    (name: string) => {
+      const normalized = name.trim();
+      if (!normalized) return;
+      const existing = favoriteLibrary.categories.find(
+        (category) =>
+          category.name.toLocaleLowerCase("zh-CN") ===
+          normalized.toLocaleLowerCase("zh-CN"),
+      );
+      if (existing) {
+        setNotice(`“${existing.name}”分类已经存在。`);
+        return;
+      }
+      const id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `favorite-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      updateFavoriteLibrary((library) =>
+        createFavoriteCategory(library, normalized, id),
+      );
+      setNotice(`已创建“${normalized.slice(0, 24)}”分类。`);
+    },
+    [favoriteLibrary.categories, updateFavoriteLibrary],
+  );
+
+  const removeSavedFavorite = useCallback(
+    (episodeId: string) => {
+      updateFavoriteLibrary((library) => removeFavorite(library, episodeId));
+      setFavoriteOrganizerId("");
+      setNotice("已从特别收藏中移除。");
+    },
+    [updateFavoriteLibrary],
+  );
+
+  const toggleFavoriteCategory = useCallback(
+    (episodeId: string, categoryId: string, selected: boolean) => {
+      updateFavoriteLibrary((library) =>
+        setFavoriteCategory(library, episodeId, categoryId, selected),
+      );
+    },
+    [updateFavoriteLibrary],
+  );
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -729,12 +855,25 @@ export function PlayerApp() {
         isVip: item.isVip,
       }));
     }
+    if (view === "favorites") {
+      return favoriteLibrary.items
+        .filter((item) => {
+          if (favoriteCategoryFilter === "all") return true;
+          if (favoriteCategoryFilter === "uncategorized") {
+            return item.categoryIds.length === 0;
+          }
+          return item.categoryIds.includes(favoriteCategoryFilter);
+        })
+        .map<Episode>((item) => ({ ...item }));
+    }
     if (query.trim().length >= 2) return searchEpisodes;
     if (activeProgram) return programEpisodes;
     return discovery.episodes;
   }, [
     activeProgram,
     discovery.episodes,
+    favoriteCategoryFilter,
+    favoriteLibrary.items,
     history,
     programEpisodes,
     query,
@@ -746,9 +885,42 @@ export function PlayerApp() {
   const pageTitle =
     view === "history"
       ? "最近收听"
+      : view === "favorites"
+        ? favoriteCategoryFilter === "all"
+          ? "特别收藏"
+          : favoriteCategoryFilter === "uncategorized"
+            ? "未分类"
+            : favoriteLibrary.categories.find(
+                (category) => category.id === favoriteCategoryFilter,
+              )?.name ?? "特别收藏"
       : query.trim().length >= 2
         ? `搜索“${query.trim()}”`
         : activeProgram?.title ?? "今天，听点有意思的";
+  const favoriteIds = useMemo(
+    () => new Set(favoriteLibrary.items.map((item) => item.id)),
+    [favoriteLibrary.items],
+  );
+  const favoriteOrganizer =
+    favoriteLibrary.items.find((item) => item.id === favoriteOrganizerId) ?? null;
+  const favoriteColumns = useMemo(
+    () => [
+      ...favoriteLibrary.categories.map((category) => ({
+        id: category.id,
+        name: category.name,
+        items: favoriteLibrary.items.filter((item) =>
+          item.categoryIds.includes(category.id),
+        ),
+      })),
+      {
+        id: "uncategorized",
+        name: "未分类",
+        items: favoriteLibrary.items.filter(
+          (item) => item.categoryIds.length === 0,
+        ),
+      },
+    ],
+    [favoriteLibrary],
+  );
 
   const togglePlay = () => {
     const audio = audioRef.current;
@@ -822,6 +994,30 @@ export function PlayerApp() {
           >
             <span className="nav-glyph">历</span>
             收听历史
+          </button>
+          <button
+            className={
+              view === "favorites" &&
+              !episodeDrawerOpen &&
+              !programDrawerOpen
+                ? "active"
+                : ""
+            }
+            type="button"
+            onClick={() => {
+              setView("favorites");
+              clearProgramContext();
+              setQuery("");
+              setSearching(false);
+              setSearchPrograms([]);
+              setSearchEpisodes([]);
+            }}
+          >
+            <span className="nav-glyph">藏</span>
+            特别收藏
+            {favoriteLibrary.items.length > 0 && (
+              <span className="nav-count">{favoriteLibrary.items.length}</span>
+            )}
           </button>
           <button
             className={programDrawerOpen ? "active" : ""}
@@ -1034,12 +1230,139 @@ export function PlayerApp() {
             </section>
           )}
 
+          {view === "favorites" && favoriteLibrary.items.length > 0 && (
+            <section className="favorite-toolbar" aria-label="收藏排列方式">
+              <div className="favorite-filter-strip">
+                <button
+                  className={favoriteCategoryFilter === "all" ? "active" : ""}
+                  type="button"
+                  onClick={() => setFavoriteCategoryFilter("all")}
+                >
+                  全部 {favoriteLibrary.items.length}
+                </button>
+                {favoriteLibrary.categories.map((category) => {
+                  const count = favoriteLibrary.items.filter((item) =>
+                    item.categoryIds.includes(category.id),
+                  ).length;
+                  return (
+                    <button
+                      className={
+                        favoriteCategoryFilter === category.id ? "active" : ""
+                      }
+                      type="button"
+                      key={category.id}
+                      onClick={() => setFavoriteCategoryFilter(category.id)}
+                    >
+                      {category.name} {count}
+                    </button>
+                  );
+                })}
+                <button
+                  className={
+                    favoriteCategoryFilter === "uncategorized" ? "active" : ""
+                  }
+                  type="button"
+                  onClick={() => setFavoriteCategoryFilter("uncategorized")}
+                >
+                  未分类{" "}
+                  {
+                    favoriteLibrary.items.filter(
+                      (item) => item.categoryIds.length === 0,
+                    ).length
+                  }
+                </button>
+              </div>
+              <div className="favorite-layout-toggle">
+                <button
+                  className={favoritesLayout === "list" ? "active" : ""}
+                  type="button"
+                  aria-pressed={favoritesLayout === "list"}
+                  onClick={() => setFavoritesLayout("list")}
+                >
+                  列表
+                </button>
+                <button
+                  className={favoritesLayout === "columns" ? "active" : ""}
+                  type="button"
+                  aria-pressed={favoritesLayout === "columns"}
+                  onClick={() => setFavoritesLayout("columns")}
+                >
+                  分栏陈列
+                </button>
+              </div>
+            </section>
+          )}
+
+          {view === "favorites" &&
+            favoritesLayout === "columns" &&
+            favoriteLibrary.items.length > 0 && (
+              <section className="favorite-board" aria-labelledby="favorite-board-title">
+                <div className="section-heading">
+                  <div>
+                    <span className="eyebrow">多分类陈列</span>
+                    <h2 id="favorite-board-title">我的收藏栏目</h2>
+                  </div>
+                  <span>{favoriteColumns.length} 个分类栏</span>
+                </div>
+                <div className="favorite-columns">
+                  {favoriteColumns.map((column) => (
+                    <section className="favorite-column" key={column.id}>
+                      <header>
+                        <strong>{column.name}</strong>
+                        <span>{column.items.length}</span>
+                      </header>
+                      {column.items.length === 0 ? (
+                        <p className="favorite-column-empty">
+                          从收藏节目中选择“整理”，即可放到这里。
+                        </p>
+                      ) : (
+                        <div>
+                          {column.items.map((favorite) => (
+                            <article className="favorite-mini-card" key={favorite.id}>
+                              <Cover
+                                className="favorite-mini-cover"
+                                src={favorite.coverUrl}
+                                title={favorite.title}
+                              />
+                              <div>
+                                <span>{favorite.programTitle ?? "凹凸宇宙"}</span>
+                                <strong>{favorite.title}</strong>
+                              </div>
+                              <div className="favorite-mini-actions">
+                                <button
+                                  type="button"
+                                  onClick={() => void beginPlayback(favorite)}
+                                >
+                                  播放
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setFavoriteOrganizerId(favorite.id)}
+                                >
+                                  整理
+                                </button>
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  ))}
+                </div>
+              </section>
+            )}
+
+          {(view !== "favorites" ||
+            favoritesLayout === "list" ||
+            favoriteLibrary.items.length === 0) && (
           <section className="episodes" aria-labelledby="episode-heading">
             <div className="section-heading">
               <div>
                 <span className="eyebrow">
                   {view === "history"
                     ? "仅保存在这台电脑"
+                    : view === "favorites"
+                      ? "保存在这台电脑 · 可多分类整理"
                     : activeProgram
                       ? "节目列表"
                       : query
@@ -1089,12 +1412,20 @@ export function PlayerApp() {
             ) : displayEpisodes.length === 0 ? (
               <div className="state-panel">
                 <strong>
-                  {view === "history" ? "还没有收听记录" : "没有找到相关节目"}
+                  {view === "history"
+                    ? "还没有收听记录"
+                    : view === "favorites"
+                      ? "还没有特别收藏"
+                      : "没有找到相关节目"}
                 </strong>
                 <p>
                   {view === "history"
                     ? "播放任意一期后，会在这里保留进度。"
-                    : "换一个关键词，或登录凹凸宇宙会员查看完整节目库。"}
+                    : view === "favorites"
+                      ? favoriteCategoryFilter === "all"
+                        ? "在节目右侧点击“收藏”，喜欢的内容就会出现在这里。"
+                        : "这个分类里还没有节目，可从全部收藏中选择“整理”。"
+                      : "换一个关键词，或登录凹凸宇宙会员查看完整节目库。"}
                 </p>
               </div>
             ) : (
@@ -1140,27 +1471,46 @@ export function PlayerApp() {
                     <span className="episode-duration">
                       {formatDuration(episode.duration)}
                     </span>
-                    <button
-                      className="round-play"
-                      type="button"
-                      aria-label={`播放 ${episode.title}`}
-                      disabled={playerBusyId === episode.id}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void beginPlayback(episode);
-                      }}
-                    >
-                      {playerBusyId === episode.id
-                        ? "…"
-                        : current?.id === episode.id && isPlaying
-                          ? "暂停"
-                          : "播放"}
-                    </button>
+                    <div className="episode-actions">
+                      <button
+                        className={`favorite-button ${
+                          favoriteIds.has(episode.id) ? "saved" : ""
+                        }`}
+                        type="button"
+                        aria-pressed={favoriteIds.has(episode.id)}
+                        aria-label={`${
+                          favoriteIds.has(episode.id) ? "整理收藏" : "收藏"
+                        } ${episode.title}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          saveFavorite(episode);
+                        }}
+                      >
+                        {favoriteIds.has(episode.id) ? "整理" : "收藏"}
+                      </button>
+                      <button
+                        className="round-play"
+                        type="button"
+                        aria-label={`播放 ${episode.title}`}
+                        disabled={playerBusyId === episode.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void beginPlayback(episode);
+                        }}
+                      >
+                        {playerBusyId === episode.id
+                          ? "…"
+                          : current?.id === episode.id && isPlaying
+                            ? "暂停"
+                            : "播放"}
+                      </button>
+                    </div>
                   </article>
                 ))}
               </div>
             )}
           </section>
+          )}
         </div>
       </section>
 
@@ -1378,6 +1728,7 @@ export function PlayerApp() {
           currentId={current?.id}
           isPlaying={isPlaying}
           busyEpisodeId={playerBusyId}
+          favoriteIds={favoriteIds}
           loading={programLoading}
           loadingMore={programLoadingMore}
           total={
@@ -1389,6 +1740,7 @@ export function PlayerApp() {
           onPlay={beginPlayback}
           onRetry={() => void selectProgram(activeProgram)}
           onLoadMore={() => void loadMoreProgramEpisodes()}
+          onSaveFavorite={saveFavorite}
         />
       )}
 
@@ -1396,6 +1748,23 @@ export function PlayerApp() {
         <div className="toast" role="status" aria-live="polite">
           {notice}
         </div>
+      )}
+
+      {favoriteOrganizer && (
+        <FavoriteOrganizer
+          favorite={favoriteOrganizer}
+          categories={favoriteLibrary.categories}
+          onClose={() => setFavoriteOrganizerId("")}
+          onCreateCategory={createCategory}
+          onRemove={() => removeSavedFavorite(favoriteOrganizer.id)}
+          onToggleCategory={(categoryId, selected) =>
+            toggleFavoriteCategory(
+              favoriteOrganizer.id,
+              categoryId,
+              selected,
+            )
+          }
+        />
       )}
 
       {loginOpen && (

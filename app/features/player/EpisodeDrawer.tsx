@@ -32,6 +32,7 @@ export function EpisodeDrawer({
   currentId,
   isPlaying,
   busyEpisodeId,
+  favoriteIds,
   loading,
   loadingMore,
   total,
@@ -41,6 +42,7 @@ export function EpisodeDrawer({
   onPlay,
   onRetry,
   onLoadMore,
+  onSaveFavorite,
 }: {
   program: Program;
   episodes: Episode[];
@@ -48,6 +50,7 @@ export function EpisodeDrawer({
   currentId?: string;
   isPlaying: boolean;
   busyEpisodeId: string;
+  favoriteIds: Set<string>;
   loading: boolean;
   loadingMore: boolean;
   total: number;
@@ -57,6 +60,7 @@ export function EpisodeDrawer({
   onPlay: (episode: Episode) => void | Promise<void>;
   onRetry: () => void;
   onLoadMore: () => void;
+  onSaveFavorite: (episode: Episode) => void;
 }) {
   const [filter, setFilter] = useState("");
 
@@ -172,7 +176,7 @@ export function EpisodeDrawer({
                 const isCurrent = currentId === episode.id;
 
                 return (
-                  <li key={episode.id}>
+                  <li className="drawer-episode-row" key={episode.id}>
                     <button
                       className={`drawer-episode ${isCurrent ? "current" : ""}`}
                       type="button"
@@ -210,6 +214,19 @@ export function EpisodeDrawer({
                               ? "续播"
                               : "播放"}
                       </span>
+                    </button>
+                    <button
+                      className={`drawer-favorite-button ${
+                        favoriteIds.has(episode.id) ? "saved" : ""
+                      }`}
+                      type="button"
+                      aria-pressed={favoriteIds.has(episode.id)}
+                      aria-label={`${
+                        favoriteIds.has(episode.id) ? "整理收藏" : "收藏"
+                      } ${episode.title}`}
+                      onClick={() => onSaveFavorite(episode)}
+                    >
+                      {favoriteIds.has(episode.id) ? "已藏" : "收藏"}
                     </button>
                   </li>
                 );
