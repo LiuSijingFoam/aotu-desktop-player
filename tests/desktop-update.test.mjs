@@ -17,7 +17,7 @@ test("packages the GitHub updater and its isolated preload bridge", async () => 
   ]);
   const packageJson = JSON.parse(packageSource);
 
-  assert.equal(packageJson.version, "0.4.0");
+  assert.equal(packageJson.version, "0.4.1");
   assert.equal(packageJson.dependencies["electron-updater"], "^6.6.2");
   assert.deepEqual(packageJson.build.publish, [
     {

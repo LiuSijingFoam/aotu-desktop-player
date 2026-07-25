@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { filterEpisodesByQuery } from "./episode-search";
 import type { FavoriteEpisode } from "./favorites";
 import { HeartButton } from "./HeartButton";
 import type { CustomPlaylist } from "./playlists";
@@ -42,6 +43,7 @@ function FavoriteCover({
 
 export function SpecialFavoritesPlaylist({
   playlist,
+  searchQuery,
   columns,
   activeFilter,
   currentEpisodeId,
@@ -58,6 +60,7 @@ export function SpecialFavoritesPlaylist({
   onMoveProgramByOffset,
 }: {
   playlist: CustomPlaylist;
+  searchQuery: string;
   columns: FavoriteProgramColumn[];
   activeFilter: string;
   currentEpisodeId?: string;
@@ -82,21 +85,39 @@ export function SpecialFavoritesPlaylist({
     id: string;
     position: "before" | "after";
   } | null>(null);
+  const normalizedSearchQuery = searchQuery.trim();
+  const matchedItems = useMemo(
+    () => filterEpisodesByQuery(playlist.items, searchQuery),
+    [playlist.items, searchQuery],
+  );
+  const filteredColumns = useMemo(
+    () =>
+      columns
+        .map((column) => ({
+          ...column,
+          items: filterEpisodesByQuery(column.items, searchQuery),
+        }))
+        .filter((column) => column.items.length > 0),
+    [columns, searchQuery],
+  );
   const visibleColumns = activeFilter.startsWith("program:")
-    ? columns.filter(
+    ? filteredColumns.filter(
         (column) =>
           column.id === activeFilter.slice("program:".length),
       )
-    : columns;
+    : filteredColumns;
 
   useEffect(() => {
     if (
       activeFilter.startsWith("program:") &&
-      visibleColumns.length === 0
+      !columns.some(
+        (column) =>
+          column.id === activeFilter.slice("program:".length),
+      )
     ) {
       onFilterChange("all");
     }
-  }, [activeFilter, onFilterChange, visibleColumns.length]);
+  }, [activeFilter, columns, onFilterChange]);
 
   return (
     <section
@@ -106,7 +127,10 @@ export function SpecialFavoritesPlaylist({
       <header className="playlist-detail-header special-favorites-header">
         <div>
           <span className="eyebrow">
-            内置列表 · {playlist.items.length} 期节目
+            内置列表 ·{" "}
+            {normalizedSearchQuery
+              ? `${matchedItems.length}/${playlist.items.length} 期 · 当前列表搜索`
+              : `${playlist.items.length} 期节目`}
             {activeQueue ? " · 当前播放队列" : ""}
           </span>
           <h3 id="special-favorites-title">特别收藏</h3>
@@ -115,7 +139,7 @@ export function SpecialFavoritesPlaylist({
           <button
             className="secondary-button"
             type="button"
-            disabled={playlist.items.length === 0}
+            disabled={matchedItems.length === 0}
             onClick={onPlayAll}
           >
             播放全部
@@ -187,155 +211,163 @@ export function SpecialFavoritesPlaylist({
               <span>{visibleColumns.length} 个栏目</span>
             </div>
             <div className="favorite-columns favorite-program-sections">
-              {visibleColumns.map((column) => (
-                <section
-                  className={`favorite-column ${
-                    draggedProgramId === column.id ? "dragging" : ""
-                  } ${
-                    dropTarget?.id === column.id
-                      ? `drop-${dropTarget.position}`
-                      : ""
-                  }`}
-                  key={column.id}
-                  onDragOver={(event) => {
-                    if (
-                      !draggedProgramId ||
-                      draggedProgramId === column.id
-                    ) {
-                      return;
-                    }
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                    const bounds =
-                      event.currentTarget.getBoundingClientRect();
-                    setDropTarget({
-                      id: column.id,
-                      position:
-                        event.clientY < bounds.top + bounds.height / 2
-                          ? "before"
-                          : "after",
-                    });
-                  }}
-                  onDragLeave={(event) => {
-                    if (
-                      event.relatedTarget instanceof Node &&
-                      event.currentTarget.contains(event.relatedTarget)
-                    ) {
-                      return;
-                    }
-                    setDropTarget((target) =>
-                      target?.id === column.id ? null : target,
-                    );
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    const sourceId =
-                      draggedProgramId ||
-                      event.dataTransfer.getData("text/plain");
-                    if (sourceId && sourceId !== column.id) {
+              {visibleColumns.length === 0 ? (
+                <div className="playlist-detail-empty compact">
+                  <strong>特别收藏中没有匹配节目</strong>
+                  <p>试试节目名、栏目名或其他关键词。</p>
+                </div>
+              ) : (
+                visibleColumns.map((column) => (
+                  <section
+                    className={`favorite-column ${
+                      draggedProgramId === column.id ? "dragging" : ""
+                    } ${
+                      dropTarget?.id === column.id
+                        ? `drop-${dropTarget.position}`
+                        : ""
+                    }`}
+                    key={column.id}
+                    onDragOver={(event) => {
+                      if (
+                        !draggedProgramId ||
+                        draggedProgramId === column.id
+                      ) {
+                        return;
+                      }
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
                       const bounds =
                         event.currentTarget.getBoundingClientRect();
-                      onMoveProgram(
-                        sourceId,
-                        column.id,
-                        dropTarget?.id === column.id
-                          ? dropTarget.position
-                          : event.clientY < bounds.top + bounds.height / 2
+                      setDropTarget({
+                        id: column.id,
+                        position:
+                          event.clientY < bounds.top + bounds.height / 2
                             ? "before"
                             : "after",
+                      });
+                    }}
+                    onDragLeave={(event) => {
+                      if (
+                        event.relatedTarget instanceof Node &&
+                        event.currentTarget.contains(event.relatedTarget)
+                      ) {
+                        return;
+                      }
+                      setDropTarget((target) =>
+                        target?.id === column.id ? null : target,
                       );
-                    }
-                    setDraggedProgramId("");
-                    setDropTarget(null);
-                  }}
-                >
-                  <header>
-                    <strong>{column.name}</strong>
-                    <div className="favorite-column-controls">
-                      <span className="favorite-column-count">
-                        {column.items.length}
-                      </span>
-                      {activeFilter === "all" && (
-                        <span
-                          className="favorite-drag-handle"
-                          role="button"
-                          tabIndex={0}
-                          draggable
-                          aria-label={`拖动“${column.name}”调整上下顺序；也可以使用上下方向键`}
-                          title="拖动调整顺序"
-                          onDragStart={(event) => {
-                            event.dataTransfer.effectAllowed = "move";
-                            event.dataTransfer.setData(
-                              "text/plain",
-                              column.id,
-                            );
-                            setDraggedProgramId(column.id);
-                          }}
-                          onDragEnd={() => {
-                            setDraggedProgramId("");
-                            setDropTarget(null);
-                          }}
-                          onKeyDown={(event) => {
-                            if (
-                              event.key !== "ArrowUp" &&
-                              event.key !== "ArrowDown"
-                            ) {
-                              return;
-                            }
-                            event.preventDefault();
-                            onMoveProgramByOffset(
-                              column.id,
-                              event.key === "ArrowUp" ? -1 : 1,
-                            );
-                          }}
-                        >
-                          拖动排序
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const sourceId =
+                        draggedProgramId ||
+                        event.dataTransfer.getData("text/plain");
+                      if (sourceId && sourceId !== column.id) {
+                        const bounds =
+                          event.currentTarget.getBoundingClientRect();
+                        onMoveProgram(
+                          sourceId,
+                          column.id,
+                          dropTarget?.id === column.id
+                            ? dropTarget.position
+                            : event.clientY < bounds.top + bounds.height / 2
+                              ? "before"
+                              : "after",
+                        );
+                      }
+                      setDraggedProgramId("");
+                      setDropTarget(null);
+                    }}
+                  >
+                    <header>
+                      <strong>{column.name}</strong>
+                      <div className="favorite-column-controls">
+                        <span className="favorite-column-count">
+                          {column.items.length}
                         </span>
-                      )}
+                        {activeFilter === "all" &&
+                          !normalizedSearchQuery && (
+                          <span
+                            className="favorite-drag-handle"
+                            role="button"
+                            tabIndex={0}
+                            draggable
+                            aria-label={`拖动“${column.name}”调整上下顺序；也可以使用上下方向键`}
+                            title="拖动调整顺序"
+                            onDragStart={(event) => {
+                              event.dataTransfer.effectAllowed = "move";
+                              event.dataTransfer.setData(
+                                "text/plain",
+                                column.id,
+                              );
+                              setDraggedProgramId(column.id);
+                            }}
+                            onDragEnd={() => {
+                              setDraggedProgramId("");
+                              setDropTarget(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (
+                                event.key !== "ArrowUp" &&
+                                event.key !== "ArrowDown"
+                              ) {
+                                return;
+                              }
+                              event.preventDefault();
+                              onMoveProgramByOffset(
+                                column.id,
+                                event.key === "ArrowUp" ? -1 : 1,
+                              );
+                            }}
+                          >
+                            拖动排序
+                          </span>
+                        )}
+                      </div>
+                    </header>
+                    <div>
+                      {column.items.map((favorite) => (
+                        <article
+                          className={`favorite-mini-card ${
+                            currentEpisodeId === favorite.id ? "current" : ""
+                          }`}
+                          key={favorite.id}
+                        >
+                          <FavoriteCover episode={favorite} />
+                          <div>
+                            <span>{favorite.programTitle ?? "凹凸宇宙"}</span>
+                            <strong>{favorite.title}</strong>
+                          </div>
+                          <div className="favorite-mini-actions">
+                            <HeartButton
+                              saved
+                              label={favorite.title}
+                              onClick={() => onToggleFavorite(favorite)}
+                            />
+                            <button
+                              type="button"
+                              disabled={busyEpisodeId === favorite.id}
+                              onClick={() => onPlay(favorite)}
+                            >
+                              {busyEpisodeId === favorite.id
+                                ? "载入中"
+                                : currentEpisodeId === favorite.id
+                                  ? "当前"
+                                  : "播放"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onAddToPlaylist(favorite)}
+                            >
+                              加入其他列表
+                            </button>
+                          </div>
+                        </article>
+                      ))}
                     </div>
-                  </header>
-                  <div>
-                    {column.items.map((favorite) => (
-                      <article
-                        className={`favorite-mini-card ${
-                          currentEpisodeId === favorite.id ? "current" : ""
-                        }`}
-                        key={favorite.id}
-                      >
-                        <FavoriteCover episode={favorite} />
-                        <div>
-                          <span>{favorite.programTitle ?? "凹凸宇宙"}</span>
-                          <strong>{favorite.title}</strong>
-                        </div>
-                        <div className="favorite-mini-actions">
-                          <HeartButton
-                            saved
-                            label={favorite.title}
-                            onClick={() => onToggleFavorite(favorite)}
-                          />
-                          <button
-                            type="button"
-                            disabled={busyEpisodeId === favorite.id}
-                            onClick={() => onPlay(favorite)}
-                          >
-                            {busyEpisodeId === favorite.id
-                              ? "载入中"
-                              : currentEpisodeId === favorite.id
-                                ? "当前"
-                                : "播放"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onAddToPlaylist(favorite)}
-                          >
-                            加入其他列表
-                          </button>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                </section>
-              ))}
+                  </section>
+                ))
+              )}
             </div>
           </section>
         </>

@@ -747,13 +747,13 @@ function createWindow(origin, { openDevTools = false } = {}) {
     minHeight: 720,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: "#171716",
+    backgroundColor: "#f3f0e7",
     ...(process.platform === "win32"
       ? {
           titleBarStyle: "hidden",
           titleBarOverlay: {
-            color: "#171716",
-            symbolColor: "#f5f1ea",
+            color: "#fbf9f3",
+            symbolColor: "#292c28",
             height: 40,
           },
         }

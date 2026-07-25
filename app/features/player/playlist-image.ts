@@ -12,24 +12,31 @@ import {
 
 const EXPORT_WIDTH = 1400;
 const QR_SIZE = 360;
-const POSTER_MARGIN = 56;
+const POSTER_MARGIN = 64;
+const CONTENT_INSET = 40;
 const HERO_HEIGHT = 420;
-const LIST_HEADER_HEIGHT = 92;
-const ROW_HEIGHT = 94;
-const EMPTY_LIST_HEIGHT = 180;
+const LIST_HEADER_HEIGHT = 96;
+const ROW_HEIGHT = 100;
+const EMPTY_LIST_HEIGHT = 184;
 const QR_PANEL_HEIGHT = 500;
-const FOOTER_HEIGHT = 80;
+const FOOTER_HEIGHT = 86;
+const PANEL_RADIUS = 32;
+const CARD_RADIUS = 24;
+const CHIP_HEIGHT = 44;
+const QR_CARD_WIDTH = 408;
+const QR_CARD_HEIGHT = 446;
 
 const POSTER_COLORS = {
-  paper: "#e9e4da",
-  paperRaised: "#f7f4ed",
-  paperMuted: "#ded8cc",
-  ink: "#191918",
-  inkSoft: "#2b2a28",
-  muted: "#77736c",
-  line: "#d3cdc1",
-  accent: "#d94f63",
-  accentDark: "#a92d42",
+  paper: "#f3f0e7",
+  paperRaised: "#fffdf8",
+  paperMuted: "#eee9de",
+  ink: "#292c28",
+  inkSoft: "#3d423d",
+  muted: "#6b716a",
+  line: "#d7d1c6",
+  accent: "#4f7968",
+  accentDark: "#3d6957",
+  accentSoft: "#dfe9e3",
   white: "#fffdf8",
 } as const;
 
@@ -192,6 +199,33 @@ function strokeRoundedRect(
   context.stroke();
 }
 
+function drawSurfacePanel(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  color: string | CanvasGradient = POSTER_COLORS.paperRaised,
+  radius = PANEL_RADIUS,
+) {
+  context.save();
+  context.shadowColor = "rgba(67, 61, 50, 0.1)";
+  context.shadowBlur = 26;
+  context.shadowOffsetY = 10;
+  fillRoundedRect(context, x, y, width, height, radius, color);
+  context.restore();
+  strokeRoundedRect(
+    context,
+    x,
+    y,
+    width,
+    height,
+    radius,
+    POSTER_COLORS.line,
+    1.5,
+  );
+}
+
 function drawTrackedText(
   context: CanvasRenderingContext2D,
   value: string,
@@ -317,11 +351,11 @@ function drawBrandMark(
     );
   });
 
-  context.fillStyle = POSTER_COLORS.white;
   context.font =
     '700 22px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
+  context.fillStyle = POSTER_COLORS.ink;
   context.fillText("凹凸宇宙", x + 72, y + 23);
-  context.fillStyle = "rgba(255,253,248,0.55)";
+  context.fillStyle = POSTER_COLORS.muted;
   context.font =
     '600 11px "Microsoft YaHei UI", sans-serif';
   drawTrackedText(context, "DESKTOP PLAYER", x + 72, y + 44, 2.2);
@@ -341,9 +375,9 @@ function drawVinylArtwork(
     centerY,
     205,
   );
-  glow.addColorStop(0, "rgba(217,79,99,0.44)");
-  glow.addColorStop(0.46, "rgba(217,79,99,0.12)");
-  glow.addColorStop(1, "rgba(217,79,99,0)");
+  glow.addColorStop(0, "rgba(79,121,104,0.32)");
+  glow.addColorStop(0.46, "rgba(79,121,104,0.1)");
+  glow.addColorStop(1, "rgba(79,121,104,0)");
   context.fillStyle = glow;
   context.beginPath();
   context.arc(centerX, centerY, 215, 0, Math.PI * 2);
@@ -403,7 +437,7 @@ function drawVinylArtwork(
       5,
       height,
       3,
-      index === 3 ? POSTER_COLORS.accent : "rgba(255,253,248,0.34)",
+      index === 3 ? POSTER_COLORS.accent : "rgba(41,44,40,0.24)",
     );
   });
   context.restore();
@@ -416,28 +450,28 @@ function drawMetaPill(
   y: number,
 ) {
   context.font =
-    '600 17px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
+    '600 18px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
   const width = context.measureText(value).width + 34;
   fillRoundedRect(
     context,
     x,
     y,
     width,
-    42,
-    21,
-    "rgba(255,253,248,0.08)",
+    CHIP_HEIGHT,
+    CHIP_HEIGHT / 2,
+    POSTER_COLORS.accentSoft,
   );
   strokeRoundedRect(
     context,
     x,
     y,
     width,
-    42,
-    21,
-    "rgba(255,253,248,0.13)",
+    CHIP_HEIGHT,
+    CHIP_HEIGHT / 2,
+    POSTER_COLORS.line,
   );
-  context.fillStyle = "rgba(255,253,248,0.76)";
-  context.fillText(value, x + 17, y + 27);
+  context.fillStyle = POSTER_COLORS.inkSoft;
+  context.fillText(value, x + 17, y + 29);
   return width;
 }
 
@@ -457,17 +491,33 @@ function drawPosterBackground(
     0,
     760,
   );
-  topGlow.addColorStop(0, "rgba(217,79,99,0.13)");
-  topGlow.addColorStop(1, "rgba(217,79,99,0)");
+  topGlow.addColorStop(0, "rgba(79,121,104,0.13)");
+  topGlow.addColorStop(1, "rgba(79,121,104,0)");
   context.fillStyle = topGlow;
   context.fillRect(0, 0, width, Math.min(height, 900));
 
-  context.strokeStyle = "rgba(25,25,24,0.045)";
-  context.lineWidth = 1;
-  for (let x = -height; x < width + height; x += 54) {
+  const lowerGlow = context.createRadialGradient(
+    0,
+    height,
+    0,
+    0,
+    height,
+    820,
+  );
+  lowerGlow.addColorStop(0, "rgba(183,135,75,0.09)");
+  lowerGlow.addColorStop(1, "rgba(183,135,75,0)");
+  context.fillStyle = lowerGlow;
+  context.fillRect(0, Math.max(0, height - 900), width, 900);
+
+  context.strokeStyle = "rgba(67,61,50,0.035)";
+  context.lineWidth = 1.2;
+  for (let index = 0; index < Math.ceil(height / 28); index += 1) {
+    const x = (index * 137) % width;
+    const y = index * 28 + 12;
+    const length = 38 + (index % 5) * 18;
     context.beginPath();
-    context.moveTo(x, 0);
-    context.lineTo(x + height, height);
+    context.moveTo(x, y);
+    context.lineTo(Math.min(width, x + length), y + (index % 3) - 1);
     context.stroke();
   }
 }
@@ -481,8 +531,8 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
       margin: 3,
       errorCorrectionLevel: "L",
       color: {
-        dark: "#171716",
-        light: "#ffffff",
+        dark: POSTER_COLORS.ink,
+        light: POSTER_COLORS.white,
       },
     });
   } catch {
@@ -518,33 +568,25 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
   drawPosterBackground(context, canvas.width, canvas.height);
 
   const contentWidth = canvas.width - POSTER_MARGIN * 2;
+  const contentX = POSTER_MARGIN + CONTENT_INSET;
+  const contentRight = canvas.width - contentX;
   const heroGradient = context.createLinearGradient(
     POSTER_MARGIN,
     heroTop,
     canvas.width - POSTER_MARGIN,
     heroTop + HERO_HEIGHT,
   );
-  heroGradient.addColorStop(0, POSTER_COLORS.inkSoft);
-  heroGradient.addColorStop(0.58, POSTER_COLORS.ink);
-  heroGradient.addColorStop(1, "#10100f");
-  fillRoundedRect(
+  heroGradient.addColorStop(0, POSTER_COLORS.paperRaised);
+  heroGradient.addColorStop(0.62, "#f7f8f2");
+  heroGradient.addColorStop(1, POSTER_COLORS.accentSoft);
+  drawSurfacePanel(
     context,
     POSTER_MARGIN,
     heroTop,
     contentWidth,
     HERO_HEIGHT,
-    38,
     heroGradient,
-  );
-  strokeRoundedRect(
-    context,
-    POSTER_MARGIN,
-    heroTop,
-    contentWidth,
-    HERO_HEIGHT,
-    38,
-    "rgba(255,253,248,0.12)",
-    2,
+    PANEL_RADIUS,
   );
 
   context.save();
@@ -554,25 +596,34 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
     heroTop,
     contentWidth,
     HERO_HEIGHT,
-    38,
+    PANEL_RADIUS,
   );
   context.clip();
-  context.strokeStyle = "rgba(255,253,248,0.035)";
-  context.lineWidth = 1;
-  for (
-    let x = POSTER_MARGIN + 24;
-    x < canvas.width - POSTER_MARGIN;
-    x += 52
-  ) {
-    context.beginPath();
-    context.moveTo(x, heroTop);
-    context.lineTo(x, heroTop + HERO_HEIGHT);
-    context.stroke();
-  }
+  const heroGlow = context.createRadialGradient(
+    canvas.width - POSTER_MARGIN,
+    heroTop,
+    0,
+    canvas.width - POSTER_MARGIN,
+    heroTop,
+    560,
+  );
+  heroGlow.addColorStop(0, "rgba(79,121,104,0.14)");
+  heroGlow.addColorStop(1, "rgba(79,121,104,0)");
+  context.fillStyle = heroGlow;
+  context.fillRect(
+    POSTER_MARGIN,
+    heroTop,
+    contentWidth,
+    HERO_HEIGHT,
+  );
   context.restore();
 
-  drawBrandMark(context, 94, heroTop + 34);
-  drawVinylArtwork(context, 1092, heroTop + 205);
+  drawBrandMark(context, contentX, heroTop + 34);
+  drawVinylArtwork(
+    context,
+    canvas.width - POSTER_MARGIN - 222,
+    heroTop + 205,
+  );
 
   context.fillStyle = POSTER_COLORS.accent;
   context.font =
@@ -582,22 +633,22 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
     playlist.id === SPECIAL_FAVORITES_PLAYLIST_ID
       ? "SPECIAL FAVORITES / 特别收藏"
       : "CURATED PLAYLIST / 自定义播放列表",
-    94,
+    contentX,
     heroTop + 154,
     1.6,
   );
 
-  context.fillStyle = POSTER_COLORS.white;
+  context.fillStyle = POSTER_COLORS.ink;
   context.font =
     '700 68px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
   const titleLines = wrapText(context, playlist.name, 710, 2);
   const titleBaseline =
     titleLines.length === 1 ? heroTop + 276 : heroTop + 244;
   titleLines.forEach((line, index) => {
-    context.fillText(line, 94, titleBaseline + index * 74);
+    context.fillText(line, contentX, titleBaseline + index * 74);
   });
 
-  let pillX = 94;
+  let pillX = contentX;
   const pillY = heroTop + 350;
   pillX +=
     drawMetaPill(
@@ -620,14 +671,20 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
     pillY,
   );
 
-  context.fillStyle = POSTER_COLORS.accentDark;
+  context.fillStyle = POSTER_COLORS.accent;
   context.font =
     '700 13px "Microsoft YaHei UI", sans-serif';
-  drawTrackedText(context, "TRACK LIST", 76, listTop + 28, 2.4);
+  drawTrackedText(
+    context,
+    "TRACK LIST",
+    contentX,
+    listTop + 28,
+    2.4,
+  );
   context.fillStyle = POSTER_COLORS.ink;
   context.font =
     '700 38px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
-  context.fillText("节目清单", 76, listTop + 72);
+  context.fillText("节目清单", contentX, listTop + 74);
 
   const trackCountLabel = `${String(playlist.items.length).padStart(
     2,
@@ -637,72 +694,76 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
   const trackCountWidth = context.measureText(trackCountLabel).width + 34;
   fillRoundedRect(
     context,
-    canvas.width - POSTER_MARGIN - trackCountWidth,
+    contentRight - trackCountWidth,
     listTop + 26,
     trackCountWidth,
-    42,
-    21,
-    POSTER_COLORS.paperMuted,
+    CHIP_HEIGHT,
+    CHIP_HEIGHT / 2,
+    POSTER_COLORS.accentSoft,
+  );
+  strokeRoundedRect(
+    context,
+    contentRight - trackCountWidth,
+    listTop + 26,
+    trackCountWidth,
+    CHIP_HEIGHT,
+    CHIP_HEIGHT / 2,
+    POSTER_COLORS.line,
   );
   context.fillStyle = POSTER_COLORS.inkSoft;
   context.fillText(
     trackCountLabel,
-    canvas.width - POSTER_MARGIN - trackCountWidth + 17,
-    listTop + 53,
+    contentRight - trackCountWidth + 17,
+    listTop + 54,
   );
 
-  fillRoundedRect(
+  drawSurfacePanel(
     context,
     POSTER_MARGIN,
     listBodyTop,
     contentWidth,
     listBodyHeight,
-    28,
     POSTER_COLORS.paperRaised,
-  );
-  strokeRoundedRect(
-    context,
-    POSTER_MARGIN,
-    listBodyTop,
-    contentWidth,
-    listBodyHeight,
-    28,
-    POSTER_COLORS.line,
+    PANEL_RADIUS,
   );
 
   if (playlist.items.length === 0) {
     fillRoundedRect(
       context,
-      84,
-      listBodyTop + 50,
+      contentX,
+      listBodyTop + 52,
       80,
       80,
-      24,
-      "rgba(217,79,99,0.11)",
+      CARD_RADIUS,
+      POSTER_COLORS.accentSoft,
     );
     const emptyBars = [20, 40, 58, 34, 17];
     emptyBars.forEach((height, index) => {
       fillRoundedRect(
         context,
-        103 + index * 11,
-        listBodyTop + 90 - height / 2,
+        contentX + 19 + index * 11,
+        listBodyTop + 92 - height / 2,
         5,
         height,
         3,
-        index === 2 ? POSTER_COLORS.accent : POSTER_COLORS.accentDark,
+        index === 2 ? POSTER_COLORS.accent : POSTER_COLORS.muted,
       );
     });
     context.fillStyle = POSTER_COLORS.ink;
     context.font =
       '700 27px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
-    context.fillText("这张节目单还在等待第一期", 196, listBodyTop + 82);
+    context.fillText(
+      "这张节目单还在等待第一期",
+      contentX + 112,
+      listBodyTop + 84,
+    );
     context.fillStyle = POSTER_COLORS.muted;
     context.font =
       '400 19px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
     context.fillText(
       "回到应用，点击节目旁的“加入列表”开始编排。",
-      196,
-      listBodyTop + 116,
+      contentX + 112,
+      listBodyTop + 118,
     );
   } else {
     context.save();
@@ -712,13 +773,14 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
       listBodyTop,
       contentWidth,
       listBodyHeight,
-      28,
+      PANEL_RADIUS,
     );
     context.clip();
     playlist.items.forEach((episode, index) => {
       const rowY = listBodyTop + index * ROW_HEIGHT;
+      const rowTextX = contentX + 76;
       if (index % 2 === 1) {
-        context.fillStyle = "rgba(222,216,204,0.32)";
+        context.fillStyle = "rgba(238,233,222,0.48)";
         context.fillRect(
           POSTER_MARGIN,
           rowY,
@@ -730,30 +792,30 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
         context.strokeStyle = POSTER_COLORS.line;
         context.lineWidth = 1;
         context.beginPath();
-        context.moveTo(82, rowY + ROW_HEIGHT);
-        context.lineTo(canvas.width - 82, rowY + ROW_HEIGHT);
+        context.moveTo(contentX, rowY + ROW_HEIGHT);
+        context.lineTo(contentRight, rowY + ROW_HEIGHT);
         context.stroke();
       }
 
       fillRoundedRect(
         context,
-        82,
-        rowY + 23,
+        contentX,
+        rowY + 25,
         48,
-        48,
-        15,
+        50,
+        14,
         index === 0
           ? POSTER_COLORS.accent
-          : "rgba(25,25,24,0.065)",
+          : POSTER_COLORS.accentSoft,
       );
       context.fillStyle =
-        index === 0 ? POSTER_COLORS.white : POSTER_COLORS.muted;
+        index === 0 ? POSTER_COLORS.white : POSTER_COLORS.accentDark;
       context.font = '700 17px "Microsoft YaHei UI", sans-serif';
       context.textAlign = "center";
       context.fillText(
         String(index + 1).padStart(2, "0"),
-        106,
-        rowY + 54,
+        contentX + 24,
+        rowY + 57,
       );
       context.textAlign = "left";
 
@@ -761,9 +823,13 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
       context.font =
         '700 25px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
       context.fillText(
-        fitText(context, episode.title, 900),
-        158,
-        rowY + 40,
+        fitText(
+          context,
+          episode.title,
+          contentRight - rowTextX - 160,
+        ),
+        rowTextX,
+        rowY + 43,
       );
       context.fillStyle = POSTER_COLORS.muted;
       context.font =
@@ -772,9 +838,13 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
         episode.isVip ? "  ·  VIP" : ""
       }`;
       context.fillText(
-        fitText(context, episodeMeta, 760),
-        158,
-        rowY + 69,
+        fitText(
+          context,
+          episodeMeta,
+          contentRight - rowTextX - 170,
+        ),
+        rowTextX,
+        rowY + 74,
       );
 
       context.textAlign = "right";
@@ -782,8 +852,8 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
       context.font = '600 18px "Microsoft YaHei UI", sans-serif';
       context.fillText(
         formatDuration(episode.duration),
-        canvas.width - 90,
-        rowY + 55,
+        contentRight,
+        rowY + 59,
       );
       context.textAlign = "left";
     });
@@ -796,16 +866,16 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
     canvas.width - POSTER_MARGIN,
     qrPanelTop + QR_PANEL_HEIGHT,
   );
-  qrPanelGradient.addColorStop(0, POSTER_COLORS.inkSoft);
-  qrPanelGradient.addColorStop(1, "#10100f");
-  fillRoundedRect(
+  qrPanelGradient.addColorStop(0, POSTER_COLORS.paperRaised);
+  qrPanelGradient.addColorStop(1, POSTER_COLORS.accentSoft);
+  drawSurfacePanel(
     context,
     POSTER_MARGIN,
     qrPanelTop,
     contentWidth,
     QR_PANEL_HEIGHT,
-    38,
     qrPanelGradient,
+    PANEL_RADIUS,
   );
 
   context.save();
@@ -815,7 +885,7 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
     qrPanelTop,
     contentWidth,
     QR_PANEL_HEIGHT,
-    38,
+    PANEL_RADIUS,
   );
   context.clip();
   const qrGlow = context.createRadialGradient(
@@ -826,8 +896,8 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
     qrPanelTop + QR_PANEL_HEIGHT,
     620,
   );
-  qrGlow.addColorStop(0, "rgba(217,79,99,0.28)");
-  qrGlow.addColorStop(1, "rgba(217,79,99,0)");
+  qrGlow.addColorStop(0, "rgba(183,135,75,0.1)");
+  qrGlow.addColorStop(1, "rgba(183,135,75,0)");
   context.fillStyle = qrGlow;
   context.fillRect(
     POSTER_MARGIN,
@@ -837,111 +907,124 @@ export async function exportPlaylistImage(playlist: CustomPlaylist) {
   );
   context.restore();
 
+  const qrCardX = contentRight - QR_CARD_WIDTH;
+  const qrCardY = qrPanelTop + 27;
+  const qrTextRight = qrCardX - 56;
+
   context.fillStyle = POSTER_COLORS.accent;
   context.font = '700 13px "Microsoft YaHei UI", sans-serif';
   drawTrackedText(
     context,
     "SCAN TO IMPORT / 扫码导入",
-    100,
+    contentX,
     qrPanelTop + 78,
     2,
   );
-  context.fillStyle = POSTER_COLORS.white;
+  context.fillStyle = POSTER_COLORS.ink;
   context.font =
     '700 44px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
-  context.fillText("把这份节目单", 100, qrPanelTop + 148);
-  context.fillText("带到另一台电脑", 100, qrPanelTop + 204);
+  context.fillText("把这份节目单", contentX, qrPanelTop + 148);
+  context.fillText("带到另一台电脑", contentX, qrPanelTop + 204);
 
-  context.strokeStyle = "rgba(255,253,248,0.12)";
+  context.strokeStyle = POSTER_COLORS.line;
   context.beginPath();
-  context.moveTo(100, qrPanelTop + 244);
-  context.lineTo(810, qrPanelTop + 244);
+  context.moveTo(contentX, qrPanelTop + 244);
+  context.lineTo(qrTextRight, qrPanelTop + 244);
   context.stroke();
 
   [1, 2].forEach((step, index) => {
     const stepY = qrPanelTop + 290 + index * 67;
     fillRoundedRect(
       context,
-      100,
+      contentX,
       stepY - 26,
       42,
       42,
       14,
       index === 0
         ? POSTER_COLORS.accent
-        : "rgba(255,253,248,0.1)",
+        : POSTER_COLORS.paperRaised,
     );
-    context.fillStyle = POSTER_COLORS.white;
+    if (index === 1) {
+      strokeRoundedRect(
+        context,
+        contentX,
+        stepY - 26,
+        42,
+        42,
+        14,
+        POSTER_COLORS.line,
+      );
+    }
+    context.fillStyle =
+      index === 0 ? POSTER_COLORS.white : POSTER_COLORS.accentDark;
     context.font = '700 16px "Microsoft YaHei UI", sans-serif';
     context.textAlign = "center";
-    context.fillText(String(step), 121, stepY + 1);
+    context.fillText(String(step), contentX + 21, stepY + 1);
     context.textAlign = "left";
     context.font =
       '500 19px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
-    context.fillStyle = "rgba(255,253,248,0.78)";
+    context.fillStyle = POSTER_COLORS.inkSoft;
     context.fillText(
       index === 0
         ? "打开“播放列表”，点击右上角“导入图片”"
         : "选择这张图片，节目清单会自动恢复",
-      160,
+      contentX + 60,
       stepY + 1,
     );
   });
 
-  context.fillStyle = "rgba(255,253,248,0.43)";
+  context.fillStyle = POSTER_COLORS.muted;
   context.font =
     '400 16px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
   context.fillText(
     "无需账号同步 · 二维码不包含账号、播放记录或音频",
-    100,
+    contentX,
     qrPanelTop + 445,
   );
 
-  const qrCardX = 902;
-  const qrCardY = qrPanelTop + 48;
-  const qrCardSize = 404;
-  fillRoundedRect(
+  drawSurfacePanel(
     context,
     qrCardX,
     qrCardY,
-    qrCardSize,
-    qrCardSize,
-    28,
+    QR_CARD_WIDTH,
+    QR_CARD_HEIGHT,
     POSTER_COLORS.white,
+    CARD_RADIUS,
   );
   context.drawImage(
     qrCanvas,
-    qrCardX + 22,
+    qrCardX + (QR_CARD_WIDTH - QR_SIZE) / 2,
     qrCardY + 22,
     QR_SIZE,
     QR_SIZE,
   );
-  context.fillStyle = "rgba(255,253,248,0.5)";
+  context.fillStyle = POSTER_COLORS.muted;
   context.font = '600 12px "Microsoft YaHei UI", sans-serif';
   context.textAlign = "center";
   context.fillText(
     `PLAYLIST QR · ${String(playlist.items.length).padStart(2, "0")}`,
-    qrCardX + qrCardSize / 2,
-    qrPanelTop + 476,
+    qrCardX + QR_CARD_WIDTH / 2,
+    qrCardY + QR_CARD_HEIGHT - 20,
   );
   context.textAlign = "left";
 
-  context.strokeStyle = "rgba(25,25,24,0.14)";
+  context.strokeStyle = POSTER_COLORS.line;
   context.beginPath();
-  context.moveTo(POSTER_MARGIN, footerTop + 30);
-  context.lineTo(canvas.width - POSTER_MARGIN, footerTop + 30);
+  context.moveTo(contentX, footerTop + 30);
+  context.lineTo(contentRight, footerTop + 30);
   context.stroke();
   context.fillStyle = POSTER_COLORS.ink;
   context.font =
     '700 17px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
-  context.fillText("凹凸宇宙桌面收听", POSTER_MARGIN, footerTop + 65);
+  context.fillText("凹凸宇宙桌面收听", contentX, footerTop + 65);
   context.fillStyle = POSTER_COLORS.muted;
   context.font =
     '400 15px "LXGW WenKai Screen", "Microsoft YaHei UI", sans-serif';
   context.textAlign = "right";
   context.fillText(
     "一张图片，收好下一段声音旅程",
-    canvas.width - POSTER_MARGIN,
+    contentRight,
     footerTop + 65,
   );
   context.textAlign = "left";

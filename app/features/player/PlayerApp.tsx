@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { ApiError, playerApi } from "./api-client";
+import { filterEpisodesByQuery } from "./episode-search";
 import { EpisodeDrawer } from "./EpisodeDrawer";
 import {
   addFavorite,
@@ -415,6 +416,8 @@ export function PlayerApp() {
       pinnedIds: [],
     });
   const [query, setQuery] = useState("");
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [playlistQuery, setPlaylistQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchPrograms, setSearchPrograms] = useState<Program[]>([]);
   const [searchEpisodes, setSearchEpisodes] = useState<Episode[]>([]);
@@ -1099,6 +1102,7 @@ export function PlayerApp() {
   const displayPrograms = query.trim().length >= 2
     ? searchPrograms
     : discovery.programs;
+  const normalizedHistoryQuery = historyQuery.trim();
   const featuredPrograms =
     query.trim().length >= 2
       ? displayPrograms
@@ -1109,15 +1113,18 @@ export function PlayerApp() {
         ).slice(0, 4);
   const displayEpisodes = useMemo(() => {
     if (view === "history") {
-      return history.map<Episode>((item) => ({
-        id: item.id,
-        title: item.title,
-        programId: item.programId,
-        programTitle: item.programTitle,
-        coverUrl: item.coverUrl,
-        duration: item.duration,
-        isVip: item.isVip,
-      }));
+      return filterEpisodesByQuery(
+        history.map<Episode>((item) => ({
+          id: item.id,
+          title: item.title,
+          programId: item.programId,
+          programTitle: item.programTitle,
+          coverUrl: item.coverUrl,
+          duration: item.duration,
+          isVip: item.isVip,
+        })),
+        historyQuery,
+      );
     }
     if (query.trim().length >= 2) return searchEpisodes;
     if (activeProgram) return programEpisodes;
@@ -1126,6 +1133,7 @@ export function PlayerApp() {
     activeProgram,
     discovery.episodes,
     history,
+    historyQuery,
     programEpisodes,
     query,
     searchEpisodes,
@@ -1135,7 +1143,9 @@ export function PlayerApp() {
   const heroProgram = activeProgram ?? displayPrograms[0] ?? null;
   const pageTitle =
     view === "history"
-      ? "最近收听"
+      ? normalizedHistoryQuery
+        ? `历史中搜索“${normalizedHistoryQuery}”`
+        : "最近收听"
       : view === "playlists"
         ? "播放列表"
       : query.trim().length >= 2
@@ -1188,6 +1198,16 @@ export function PlayerApp() {
       })),
     }),
     [favoriteLibrary.items, resolvedFavoriteItems],
+  );
+  const searchedSpecialFavoritesPlaylist = useMemo<CustomPlaylist>(
+    () => ({
+      ...specialFavoritesPlaylist,
+      items: filterEpisodesByQuery(
+        specialFavoritesPlaylist.items,
+        playlistQuery,
+      ),
+    }),
+    [playlistQuery, specialFavoritesPlaylist],
   );
   const favoriteProgramColumns = useMemo(
     () =>
@@ -1394,13 +1414,39 @@ export function PlayerApp() {
       <section className="content">
         <header className="topbar">
           <label className="search-box">
-            <span>搜索</span>
+            <span>
+              {view === "playlists"
+                ? "列表内"
+                : view === "history"
+                  ? "历史内"
+                  : "搜索"}
+            </span>
             <input
               type="search"
-              value={query}
-              placeholder="节目、单集或关键词"
+              value={
+                view === "playlists"
+                  ? playlistQuery
+                  : view === "history"
+                    ? historyQuery
+                    : query
+              }
+              placeholder={
+                view === "playlists"
+                  ? "搜索当前播放列表"
+                  : view === "history"
+                    ? "搜索收听历史"
+                  : "节目、单集或关键词"
+              }
               onChange={(event) => {
                 const nextQuery = event.target.value;
+                if (view === "playlists") {
+                  setPlaylistQuery(nextQuery);
+                  return;
+                }
+                if (view === "history") {
+                  setHistoryQuery(nextQuery);
+                  return;
+                }
                 setQuery(nextQuery);
                 if (nextQuery.trim().length < 2) {
                   setSearching(false);
@@ -1413,7 +1459,9 @@ export function PlayerApp() {
                 clearProgramContext();
               }}
             />
-            {searching && <i className="search-spinner" aria-label="搜索中" />}
+            {view === "discover" && searching && (
+              <i className="search-spinner" aria-label="搜索中" />
+            )}
           </label>
           {!viewer && (
             <button
@@ -1525,11 +1573,13 @@ export function PlayerApp() {
           {view === "playlists" && (
             <PlaylistWorkspace
               library={playlistLibrary}
+              searchQuery={playlistQuery}
               specialPlaylistId={SPECIAL_FAVORITES_PLAYLIST_ID}
               specialPlaylistCount={favoriteLibrary.items.length}
               specialContent={
                 <SpecialFavoritesPlaylist
                   playlist={specialFavoritesPlaylist}
+                  searchQuery={playlistQuery}
                   columns={favoriteProgramColumns}
                   activeFilter={favoriteCategoryFilter}
                   currentEpisodeId={current?.id}
@@ -1545,7 +1595,7 @@ export function PlayerApp() {
                   onFilterChange={setFavoriteCategoryFilter}
                   onPlay={(episode) => beginPlayback(episode)}
                   onPlayAll={() =>
-                    playCustomPlaylist(specialFavoritesPlaylist)
+                    playCustomPlaylist(searchedSpecialFavoritesPlaylist)
                   }
                   onAddToPlaylist={setPlaylistPickerEpisode}
                   onToggleFavorite={toggleSpecialFavorite}
@@ -1634,12 +1684,16 @@ export function PlayerApp() {
               <div className="state-panel">
                 <strong>
                   {view === "history"
-                    ? "还没有收听记录"
+                    ? history.length === 0
+                      ? "还没有收听记录"
+                      : "收听历史中没有匹配节目"
                     : "没有找到相关节目"}
                 </strong>
                 <p>
                   {view === "history"
-                    ? "播放任意一期后，会在这里保留进度。"
+                    ? history.length === 0
+                      ? "播放任意一期后，会在这里保留进度。"
+                      : "试试节目名、栏目名或其他关键词。"
                     : "换一个关键词，或登录凹凸宇宙会员查看完整节目库。"}
                 </p>
               </div>

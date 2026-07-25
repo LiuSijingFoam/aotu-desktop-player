@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   createPlaylist,
   createPlaylistSharePayload,
+  filterPlaylistEpisodes,
   importPlaylist,
   parsePlaylistLibrary,
   parsePlaylistSharePayload,
@@ -14,6 +15,7 @@ import {
   decodePlaylistQrData,
   encodePlaylistQrData,
 } from "../app/features/player/playlist-image.ts";
+import { filterEpisodesByQuery } from "../app/features/player/episode-search.ts";
 
 const episode = {
   id: "101",
@@ -99,4 +101,75 @@ test("validates shared data and imports duplicate names as a new playlist", () =
   assert.equal(imported.playlists.length, 2);
   assert.equal(imported.playlists[0].name, "通勤路上（导入）");
   assert.equal(imported.playlists[0].items[0].id, "101");
+});
+
+test("filters only the current playlist by episode and program text", () => {
+  const items = [
+    episode,
+    {
+      ...episode,
+      id: "102",
+      title: "周末散步指南",
+      programTitle: "凹凸茶水间",
+      publishedAt: "2026-06-19",
+    },
+    {
+      ...episode,
+      id: "103",
+      title: "夜间来信",
+      programTitle: "故事电台",
+    },
+  ];
+
+  assert.deepEqual(
+    filterPlaylistEpisodes(items, "茶水").map((item) => item.id),
+    ["102"],
+  );
+  assert.deepEqual(
+    filterPlaylistEpisodes(items, "周末 茶水").map((item) => item.id),
+    ["102"],
+  );
+  assert.deepEqual(
+    filterPlaylistEpisodes(items, "2026-06-19").map((item) => item.id),
+    ["102"],
+  );
+  assert.deepEqual(
+    filterPlaylistEpisodes(items, "  ").map((item) => item.id),
+    ["101", "102", "103"],
+  );
+});
+
+test("filters local playlist and history episodes by title and program", () => {
+  const items = [
+    {
+      id: "one",
+      title: "婚礼现场的修罗场",
+      programTitle: "凹凸茶水间",
+      publishedAt: "2026-06-19",
+    },
+    {
+      id: "two",
+      title: "适合通勤的一期",
+      programTitle: "凹凸电波",
+      publishedAt: "2026-05-01",
+    },
+  ];
+
+  assert.deepEqual(
+    filterEpisodesByQuery(items, "婚礼").map((item) => item.id),
+    ["one"],
+  );
+  assert.deepEqual(
+    filterEpisodesByQuery(items, "茶水 婚礼").map((item) => item.id),
+    ["one"],
+  );
+  assert.deepEqual(
+    filterEpisodesByQuery(items, "电波").map((item) => item.id),
+    ["two"],
+  );
+  assert.deepEqual(filterEpisodesByQuery(items, "不存在"), []);
+  assert.deepEqual(
+    filterEpisodesByQuery(items, "  ").map((item) => item.id),
+    ["one", "two"],
+  );
 });

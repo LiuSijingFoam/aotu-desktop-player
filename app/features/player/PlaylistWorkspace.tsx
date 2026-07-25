@@ -1,6 +1,13 @@
 "use client";
 
-import { FormEvent, type ReactNode, useRef, useState } from "react";
+import {
+  FormEvent,
+  type ReactNode,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { filterEpisodesByQuery } from "./episode-search";
 import { HeartButton } from "./HeartButton";
 import type { CustomPlaylist, PlaylistLibrary } from "./playlists";
 import type { Episode } from "./types";
@@ -46,6 +53,7 @@ function PlaylistCover({
 
 export function PlaylistWorkspace({
   library,
+  searchQuery,
   specialPlaylistId,
   specialPlaylistCount,
   specialContent,
@@ -69,6 +77,7 @@ export function PlaylistWorkspace({
   onImport,
 }: {
   library: PlaylistLibrary;
+  searchQuery: string;
   specialPlaylistId: string;
   specialPlaylistCount: number;
   specialContent: ReactNode;
@@ -103,6 +112,14 @@ export function PlaylistWorkspace({
       ) ??
       library.playlists[0] ??
       null;
+  const normalizedSearchQuery = searchQuery.trim();
+  const visibleItems = useMemo(
+    () =>
+      selectedPlaylist
+        ? filterEpisodesByQuery(selectedPlaylist.items, searchQuery)
+        : [],
+    [searchQuery, selectedPlaylist],
+  );
   const renaming = Boolean(
     selectedPlaylist && renamingPlaylistId === selectedPlaylist.id,
   );
@@ -241,7 +258,9 @@ export function PlaylistWorkspace({
               <header className="playlist-detail-header">
                 <div>
                   <span className="eyebrow">
-                    {selectedPlaylist.items.length} 期节目
+                    {normalizedSearchQuery
+                      ? `${visibleItems.length}/${selectedPlaylist.items.length} 期 · 当前列表搜索`
+                      : `${selectedPlaylist.items.length} 期节目`}
                     {activeQueuePlaylistId === selectedPlaylist.id
                       ? " · 当前播放队列"
                       : ""}
@@ -273,8 +292,13 @@ export function PlaylistWorkspace({
                   <button
                     className="secondary-button"
                     type="button"
-                    disabled={selectedPlaylist.items.length === 0}
-                    onClick={() => onPlayAll(selectedPlaylist)}
+                    disabled={visibleItems.length === 0}
+                    onClick={() =>
+                      onPlayAll({
+                        ...selectedPlaylist,
+                        items: visibleItems,
+                      })
+                    }
                   >
                     播放全部
                   </button>
@@ -313,9 +337,14 @@ export function PlaylistWorkspace({
                   <strong>这个列表还是空的</strong>
                   <p>从发现页、栏目节目单、历史或其他播放列表中加入节目。</p>
                 </div>
+              ) : visibleItems.length === 0 ? (
+                <div className="playlist-detail-empty compact">
+                  <strong>当前列表没有匹配节目</strong>
+                  <p>试试节目名、栏目名或其他关键词。</p>
+                </div>
               ) : (
                 <ol className="playlist-episode-list">
-                  {selectedPlaylist.items.map((episode, index) => {
+                  {visibleItems.map((episode, index) => {
                     const isCurrent = currentEpisodeId === episode.id;
                     return (
                       <li
