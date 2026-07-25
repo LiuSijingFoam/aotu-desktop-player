@@ -64,23 +64,22 @@ export function UpdateNotice() {
     };
   }, []);
 
-  if (
-    !status ||
-    !(
-      status.phase === "available" ||
-      status.phase === "downloading" ||
-      status.phase === "ready" ||
-      (status.phase === "error" && status.latestVersion)
-    )
-  ) {
-    return null;
-  }
+  if (!status) return null;
 
   const progress = Math.round(status.percent ?? 0);
   const downloaded = formatMegabytes(status.transferred);
   const total = formatMegabytes(status.total);
   const isReady = status.phase === "ready";
   const isError = status.phase === "error";
+  const isChecking = status.phase === "checking";
+  const hasUpdate =
+    status.phase === "available" ||
+    status.phase === "downloading" ||
+    isReady;
+  const canCheck =
+    status.phase === "idle" ||
+    status.phase === "up-to-date" ||
+    isError;
 
   const handleAction = async () => {
     const updates = window.aotuDesktop?.updates;
@@ -90,12 +89,54 @@ export function UpdateNotice() {
       if (isReady) {
         await updates.install();
       } else {
-        await updates.check();
+        const nextStatus = await updates.check();
+        if (nextStatus) setStatus(nextStatus);
       }
     } finally {
       setActionBusy(false);
     }
   };
+
+  if (!hasUpdate && !isError) {
+    const statusText =
+      status.phase === "up-to-date"
+        ? "已是最新版本"
+        : isChecking
+          ? "正在检查更新…"
+          : status.phase === "unsupported"
+            ? "网页预览模式"
+            : "等待检查更新";
+
+    return (
+      <section
+        className="update-notice is-compact"
+        aria-live="polite"
+        aria-label="版本与更新"
+      >
+        <div className="update-compact-row">
+          <div>
+            <span className="update-notice-kicker">应用版本</span>
+            <strong>v{status.currentVersion}</strong>
+          </div>
+          <span
+            className={`update-state ${isChecking ? "is-checking" : ""}`}
+          >
+            {statusText}
+          </span>
+        </div>
+        {status.phase !== "unsupported" && (
+          <button
+            className="update-check-action"
+            type="button"
+            disabled={!canCheck || actionBusy}
+            onClick={handleAction}
+          >
+            {isChecking || actionBusy ? "正在检查…" : "检查更新"}
+          </button>
+        )}
+      </section>
+    );
+  }
 
   return (
     <section
@@ -117,7 +158,9 @@ export function UpdateNotice() {
                 ? "更新未完成"
                 : "发现新版本"}
           </span>
-          <strong>v{status.latestVersion}</strong>
+          <strong>
+            {status.latestVersion ? `v${status.latestVersion}` : "检查失败"}
+          </strong>
         </div>
       </div>
 
