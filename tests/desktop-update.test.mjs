@@ -13,11 +13,11 @@ test("packages the GitHub updater and its isolated preload bridge", async () => 
   const [packageSource, mainSource, preloadSource] = await Promise.all([
     readFile(new URL("package.json", projectRoot), "utf8"),
     readFile(new URL("desktop/main.mjs", projectRoot), "utf8"),
-    readFile(new URL("desktop/preload.mjs", projectRoot), "utf8"),
+    readFile(new URL("desktop/preload.cjs", projectRoot), "utf8"),
   ]);
   const packageJson = JSON.parse(packageSource);
 
-  assert.equal(packageJson.version, "0.3.2");
+  assert.equal(packageJson.version, "0.3.3");
   assert.equal(packageJson.dependencies["electron-updater"], "^6.6.2");
   assert.deepEqual(packageJson.build.publish, [
     {
@@ -34,8 +34,11 @@ test("packages the GitHub updater and its isolated preload bridge", async () => 
     mainSource,
     /await flushDesktopSessionStorage\("update-install"\)/,
   );
-  assert.match(mainSource, /preload\.mjs/);
+  assert.match(mainSource, /preload\.cjs/);
   assert.match(preloadSource, /contextBridge\.exposeInMainWorld/);
+  assert.match(preloadSource, /require\("electron"\)/);
+  assert.match(preloadSource, /desktop-data:get/);
+  assert.doesNotMatch(preloadSource, /\bimport\s/);
   assert.doesNotMatch(preloadSource, /executeJavaScript|shell|fs|child_process/);
 });
 

@@ -63,11 +63,38 @@ function readHistory(): HistoryEntry[] {
   try {
     const value = localStorage.getItem(HISTORY_KEY);
     if (!value) return [];
-    const parsed = JSON.parse(value) as HistoryEntry[];
-    return Array.isArray(parsed) ? parsed.slice(0, 40) : [];
+    return parseHistory(JSON.parse(value));
   } catch {
     return [];
   }
+}
+
+function parseHistory(value: unknown): HistoryEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(
+      (entry): entry is HistoryEntry =>
+        Boolean(
+          entry &&
+            typeof entry === "object" &&
+            "id" in entry &&
+            typeof entry.id === "string" &&
+            "title" in entry &&
+            typeof entry.title === "string" &&
+            "programId" in entry &&
+            typeof entry.programId === "string" &&
+            "programTitle" in entry &&
+            typeof entry.programTitle === "string",
+        ),
+    )
+    .slice(0, 40);
+}
+
+function persistDesktopData(
+  key: "history" | "programPreferences",
+  value: unknown,
+) {
+  void window.aotuDesktop?.storage.set(key, value);
 }
 
 function readProgramPreferences() {
@@ -81,14 +108,13 @@ function readProgramPreferences() {
 }
 
 function writeProgramPreferences(preferences: ProgramPreferences) {
+  const serialized = serializeProgramPreferences(preferences);
   try {
-    localStorage.setItem(
-      PROGRAM_PREFERENCES_STORAGE_KEY,
-      serializeProgramPreferences(preferences),
-    );
+    localStorage.setItem(PROGRAM_PREFERENCES_STORAGE_KEY, serialized);
   } catch {
     // Private browsing or a full storage quota should not block playback.
   }
+  persistDesktopData("programPreferences", serialized);
 }
 
 function Cover({
@@ -342,9 +368,43 @@ export function PlayerApp() {
   }, []);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      setHistory(readHistory());
-      setProgramPreferences(readProgramPreferences());
+    queueMicrotask(async () => {
+      const localHistory = readHistory();
+      const localPreferences = readProgramPreferences();
+      const storage = window.aotuDesktop?.storage;
+      if (!storage) {
+        setHistory(localHistory);
+        setProgramPreferences(localPreferences);
+        return;
+      }
+
+      try {
+        const [storedHistory, storedPreferences] = await Promise.all([
+          storage.get<unknown>("history"),
+          storage.get<unknown>("programPreferences"),
+        ]);
+        const nextHistory =
+          storedHistory === null ? localHistory : parseHistory(storedHistory);
+        const nextPreferences =
+          typeof storedPreferences === "string"
+            ? parseProgramPreferences(storedPreferences)
+            : localPreferences;
+
+        setHistory(nextHistory);
+        setProgramPreferences(nextPreferences);
+        if (storedHistory === null && localHistory.length > 0) {
+          persistDesktopData("history", localHistory);
+        }
+        if (storedPreferences === null) {
+          persistDesktopData(
+            "programPreferences",
+            serializeProgramPreferences(localPreferences),
+          );
+        }
+      } catch {
+        setHistory(localHistory);
+        setProgramPreferences(localPreferences);
+      }
     });
     Promise.allSettled([playerApi.session(), playerApi.discovery()]).then(
       ([sessionResult, discoveryResult]) => {
@@ -448,7 +508,12 @@ export function PlayerApp() {
           0,
           40,
         );
-        localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+        try {
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+        } catch {
+          // The desktop store remains the durable source when web storage fails.
+        }
+        persistDesktopData("history", next);
         return next;
       });
     },

@@ -10,8 +10,10 @@ import electronUpdater from "electron-updater";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
 import { createMemberSessionStore } from "./member-session-store.mjs";
+import { createPlayerDataStore } from "./player-data-store.mjs";
 import { createSessionPersistence } from "./session-persistence.mjs";
 
 const { autoUpdater } = electronUpdater;
@@ -22,6 +24,11 @@ const UPDATE_STATUS_CHANNEL = "desktop-update:status";
 const UPDATE_GET_STATUS_CHANNEL = "desktop-update:get-status";
 const UPDATE_CHECK_CHANNEL = "desktop-update:check";
 const UPDATE_INSTALL_CHANNEL = "desktop-update:install";
+const PLAYER_DATA_GET_CHANNEL = "desktop-data:get";
+const PLAYER_DATA_SET_CHANNEL = "desktop-data:set";
+const LEGACY_HISTORY_KEY = "aotu-desktop-history-v1";
+const LEGACY_PROGRAM_PREFERENCES_KEY =
+  "aotu-desktop-program-preferences-v1";
 
 // This is a dedicated audio player; a user selecting an episode should be
 // allowed to start playback after the app finishes resolving its stream URL.
@@ -48,10 +55,12 @@ const STATIC_CONTENT_TYPES = new Map([
 let mainWindow;
 let localServer;
 let isQuitting = false;
+let isMigratingLegacyData = false;
 let windowOrigin;
 let windowOpenDevTools = false;
 let updateCheckPromise;
 let memberSessionStore;
+let playerDataStore;
 let desktopSessionPersistence;
 let quitStorageFlushed = false;
 let quitStorageFlushPromise;
@@ -125,6 +134,7 @@ function setupDesktopSessionPersistence() {
 
 async function flushDesktopSessionStorage(reason) {
   await memberSessionStore?.flush();
+  await playerDataStore?.flush();
   if (!desktopSessionPersistence) return;
   await desktopSessionPersistence.flush(reason);
 }
@@ -170,6 +180,171 @@ async function setupMemberSessionStore() {
     status: restored.status,
   });
   memberSessionStore.start();
+}
+
+function playerDataStorePath() {
+  return path.join(app.getPath("userData"), "player-data.json");
+}
+
+async function setupPlayerDataStore() {
+  const storePath = playerDataStorePath();
+  playerDataStore = createPlayerDataStore({
+    read: () => fsPromises.readFile(storePath, "utf8"),
+    write: (serialized) => writePrivateFile(storePath, serialized),
+    onResult: ({ operation, ok, detail }) => {
+      logEvent(ok ? "info" : "error", "player-data-store", {
+        operation,
+        ...(detail ? { detail } : {}),
+      });
+    },
+  });
+  await playerDataStore.load();
+}
+
+async function legacyDesktopPorts() {
+  try {
+    const ports = [];
+    const seen = new Set();
+    const entries = (await fsPromises.readFile(logFilePath(), "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .reverse();
+    for (const entry of entries) {
+      const parsed = JSON.parse(entry);
+      const port = parsed?.event === "local-server-started" ? parsed.port : 0;
+      if (
+        Number.isInteger(port) &&
+        port >= 1024 &&
+        port <= 65535 &&
+        !seen.has(port)
+      ) {
+        seen.add(port);
+        ports.push(port);
+      }
+      if (ports.length >= 24) break;
+    }
+    return ports;
+  } catch {
+    return [];
+  }
+}
+
+function listenOnPort(server, port) {
+  return new Promise((resolve, reject) => {
+    const handleError = (error) => {
+      server.off("listening", handleListening);
+      reject(error);
+    };
+    const handleListening = () => {
+      server.off("error", handleError);
+      resolve();
+    };
+    server.once("error", handleError);
+    server.once("listening", handleListening);
+    server.listen(port, LOOPBACK_HOST);
+  });
+}
+
+function closeServer(server) {
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
+async function migrateLegacyPlayerData() {
+  if (playerDataStore?.get("history") !== null) return;
+
+  const ports = await legacyDesktopPorts();
+  const histories = [];
+  let migratedPreferences = null;
+  if (ports.length === 0) {
+    await playerDataStore.set("history", []);
+    logEvent("info", "legacy-player-data-migrated", {
+      portsChecked: 0,
+      historyEntries: 0,
+      preferencesFound: false,
+    });
+    return;
+  }
+
+  isMigratingLegacyData = true;
+  const migrationWindow = new BrowserWindow({
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  try {
+    for (const port of ports) {
+      const migrationServer = createServer((_request, response) => {
+        response.writeHead(200, {
+          "Cache-Control": "no-store",
+          Connection: "close",
+          "Content-Security-Policy": "default-src 'none'",
+          "Content-Type": "text/html; charset=utf-8",
+        });
+        response.end("<!doctype html><title>migration</title>");
+      });
+      try {
+        await listenOnPort(migrationServer, port);
+        await migrationWindow.loadURL(`http://${LOOPBACK_HOST}:${port}`);
+        const legacy = await migrationWindow.webContents.executeJavaScript(
+          `({
+            history: localStorage.getItem(${JSON.stringify(LEGACY_HISTORY_KEY)}),
+            programPreferences: localStorage.getItem(${JSON.stringify(
+              LEGACY_PROGRAM_PREFERENCES_KEY,
+            )})
+          })`,
+        );
+        if (typeof legacy?.history === "string") {
+          const parsedHistory = JSON.parse(legacy.history);
+          if (Array.isArray(parsedHistory)) histories.push(...parsedHistory);
+        }
+        if (
+          migratedPreferences === null &&
+          typeof legacy?.programPreferences === "string"
+        ) {
+          migratedPreferences = legacy.programPreferences;
+        }
+      } catch {
+        // Ports reused by another process or malformed legacy data are skipped.
+      } finally {
+        if (migrationServer.listening) await closeServer(migrationServer);
+      }
+    }
+  } finally {
+    migrationWindow.destroy();
+    await new Promise((resolve) => setImmediate(resolve));
+    isMigratingLegacyData = false;
+  }
+
+  const historyById = new Map();
+  for (const entry of histories) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      continue;
+    }
+    const existing = historyById.get(entry.id);
+    if (
+      !existing ||
+      Number(entry.playedAt ?? 0) > Number(existing.playedAt ?? 0)
+    ) {
+      historyById.set(entry.id, entry);
+    }
+  }
+  const migratedHistory = [...historyById.values()]
+    .sort((left, right) => Number(right.playedAt ?? 0) - Number(left.playedAt ?? 0))
+    .slice(0, 40);
+
+  await playerDataStore.set("history", migratedHistory);
+  if (migratedPreferences !== null) {
+    await playerDataStore.set("programPreferences", migratedPreferences);
+  }
+  logEvent("info", "legacy-player-data-migrated", {
+    portsChecked: ports.length,
+    historyEntries: migratedHistory.length,
+    preferencesFound: migratedPreferences !== null,
+  });
 }
 
 function closeLocalServer() {
@@ -317,6 +492,17 @@ function setupDesktopUpdateIpc() {
   });
 }
 
+function setupPlayerDataIpc() {
+  ipcMain.handle(PLAYER_DATA_GET_CHANNEL, (event, key) => {
+    if (!trustedIpcSender(event) || typeof key !== "string") return null;
+    return playerDataStore?.get(key) ?? null;
+  });
+  ipcMain.handle(PLAYER_DATA_SET_CHANNEL, (event, key, value) => {
+    if (!trustedIpcSender(event) || typeof key !== "string") return false;
+    return playerDataStore?.set(key, value) ?? false;
+  });
+}
+
 function runtimeConfigPath() {
   return app.isPackaged
     ? path.join(process.resourcesPath, "desktop-runtime.json")
@@ -327,6 +513,47 @@ function serverOutputPath() {
   return app.isPackaged
     ? path.join(process.resourcesPath, "app-dist")
     : path.join(app.getAppPath(), "dist");
+}
+
+function desktopPortPath() {
+  return path.join(app.getPath("userData"), "desktop-port.txt");
+}
+
+async function readPreferredDesktopPort() {
+  try {
+    const savedPort = Number.parseInt(
+      await fsPromises.readFile(desktopPortPath(), "utf8"),
+      10,
+    );
+    if (savedPort >= 1024 && savedPort <= 65535) return savedPort;
+  } catch {
+    // The first version with stable ports will migrate from the last log entry.
+  }
+
+  try {
+    const entries = (await fsPromises.readFile(logFilePath(), "utf8"))
+      .trim()
+      .split(/\r?\n/)
+      .reverse();
+    for (const entry of entries) {
+      const parsed = JSON.parse(entry);
+      if (
+        parsed?.event === "local-server-started" &&
+        Number.isInteger(parsed.port) &&
+        parsed.port >= 1024 &&
+        parsed.port <= 65535
+      ) {
+        return parsed.port;
+      }
+    }
+  } catch {
+    // A missing or partially written log simply starts with a random port.
+  }
+  return 0;
+}
+
+async function rememberDesktopPort(port) {
+  await writePrivateFile(desktopPortPath(), String(port));
 }
 
 function constantTimeEqual(left, right) {
@@ -536,7 +763,7 @@ function createWindow(origin, { openDevTools = false } = {}) {
       nodeIntegration: false,
       sandbox: true,
       devTools: !app.isPackaged,
-      preload: path.join(app.getAppPath(), "desktop", "preload.mjs"),
+      preload: path.join(app.getAppPath(), "desktop", "preload.cjs"),
     },
   });
 
@@ -556,8 +783,21 @@ function createWindow(origin, { openDevTools = false } = {}) {
       exitCode: details.exitCode,
     });
   });
-  mainWindow.webContents.on("did-finish-load", () => {
+  mainWindow.webContents.on("did-finish-load", async () => {
     logEvent("info", "renderer-loaded");
+    try {
+      const bridgeAvailable = await mainWindow?.webContents.executeJavaScript(
+        "Boolean(window.aotuDesktop?.updates && window.aotuDesktop?.storage)",
+      );
+      logEvent(bridgeAvailable ? "info" : "error", "desktop-bridge-status", {
+        available: Boolean(bridgeAvailable),
+      });
+    } catch (error) {
+      logEvent("error", "desktop-bridge-status", {
+        available: false,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
     if (openDevTools) {
       mainWindow?.webContents.openDevTools({ mode: "detach" });
     }
@@ -596,13 +836,30 @@ async function startDesktop() {
 
   const accessKey = randomBytes(32).toString("base64url");
   const { startProdServer } = await import("vinext/server/prod-server");
-  const started = await startProdServer({
-    host: LOOPBACK_HOST,
-    port: 0,
-    outDir,
-    noCompression: false,
-  });
+  const preferredPort = await readPreferredDesktopPort();
+  let started;
+  try {
+    started = await startProdServer({
+      host: LOOPBACK_HOST,
+      port: preferredPort,
+      outDir,
+      noCompression: false,
+    });
+  } catch (error) {
+    if (!preferredPort) throw error;
+    logEvent("warn", "preferred-port-unavailable", {
+      port: preferredPort,
+      detail: error instanceof Error ? error.message : String(error),
+    });
+    started = await startProdServer({
+      host: LOOPBACK_HOST,
+      port: 0,
+      outDir,
+      noCompression: false,
+    });
+  }
   localServer = started.server;
+  await rememberDesktopPort(started.port);
   protectServer(localServer, accessKey, path.join(outDir, "client"));
   attachDesktopRequestKey(started.port, accessKey);
   logEvent("info", "local-server-started", {
@@ -624,7 +881,7 @@ if (!hasSingleInstanceLock) {
 } else {
   app.on("second-instance", focusMainWindow);
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") app.quit();
+    if (!isMigratingLegacyData && process.platform !== "darwin") app.quit();
   });
   app.on("before-quit", (event) => {
     isQuitting = true;
@@ -655,8 +912,11 @@ if (!hasSingleInstanceLock) {
       app.setName(APP_NAME);
       app.setAppUserModelId("com.personal.aotu.desktop");
       await setupMemberSessionStore();
+      await setupPlayerDataStore();
+      await migrateLegacyPlayerData();
       setupDesktopSessionPersistence();
       setupDesktopUpdateIpc();
+      setupPlayerDataIpc();
       setupDesktopUpdates();
       return startDesktop();
     })
